@@ -23,11 +23,15 @@ class ConvLayer(nn.Module):
         super(ConvLayer, self).__init__()
         self.atom_fea_len = atom_fea_len
         self.nbr_fea_len = nbr_fea_len
+        # Linear layer maps concatenated [center_atom(node)_fea, neighbor_atom(node)_fea, bond(edge)_fea]
+        # of size (2*atom_fea_len + nbr_fea_len) → output size (2*atom_fea_len)
         self.fc_full = nn.Linear(2*self.atom_fea_len+self.nbr_fea_len,
                                  2*self.atom_fea_len)
         self.sigmoid = nn.Sigmoid()
         self.softplus1 = nn.Softplus()
+        # Batch normalization over (N*M, 2F) in message update stage
         self.bn1 = nn.BatchNorm1d(2*self.atom_fea_len)
+        # Batch normalization over (N, F) after aggregation
         self.bn2 = nn.BatchNorm1d(self.atom_fea_len)
         self.softplus2 = nn.Softplus()
 
@@ -56,12 +60,43 @@ class ConvLayer(nn.Module):
 
         """
         # TODO will there be problems with the index zero padding?
+        # N: number of center atoms (nodes).
+        # M: number of neighbor atoms (nodes) per center atom (node)
         N, M = nbr_fea_idx.shape
         # convolution
+        # Gather neighbor atom (node) features:
+        # `atom_in_fea` shape `(N, F)`, `nbr_fea_idx` shape `(N, M)`
+        # `atom_in_fea[nbr_fea_idx, :]` performs advanced indexing on axis 0:
+        #   for each center atom (node) i and neighbor slot j,
+        #   `nbr_fea_idx[i, j] = k` → neighbor atom (node) index k
+        #   retrieves `atom_in_fea[k, :]` of shape `(F,)`
+        # The resulting `atom_nbr_fea` has shape `(N, M, F)`
+        # Each `atom_nbr_fea[i, j, :]` = feature vector of j-th neighbor atom (node)
+        # of center atom (node) i.
         atom_nbr_fea = atom_in_fea[nbr_fea_idx, :]
+        # Combine (concatenate) the center-atom, neighbor-atom, and bond features
+        # to form the full per-edge input tensor $z_{(i,j)_k} = [v_i^{(t)}, v_j^{(t)}, u_{(i,j)_k}]$
         total_nbr_fea = torch.cat(
-            [atom_in_fea.unsqueeze(1).expand(N, M, self.atom_fea_len),
-             atom_nbr_fea, nbr_fea], dim=2)
+            [
+                # (1) atom_in_fea: (N, F)
+                #     Each row is the feature vector $v_i^{(t)}$ for one "center" atom i.
+                #     unsqueeze(1) -> (N, 1, F): add neighbor dimension.
+                #     expand(N, M, F): duplicate $v_i^{(t)}$ for all M neighbors.
+                #     Physically: every bond $(i,j)_k$ needs to know which atom i it originates from,
+                #     so we attach the same $v_i^{(t)}$ to all its neighbor edges.
+                atom_in_fea.unsqueeze(1).expand(N, M, self.atom_fea_len),
+                # (2) atom_nbr_fea: (N, M, F)
+                #     Neighbor atom features $v_j^{(t)}$ for each neighbor j of atom i.
+                atom_nbr_fea,
+                # (3) nbr_fea: (N, M, B)
+                #     Bond (edge) features $u_{(i,j)_k}$ that describe the bond between i and j
+                #     (e.g., distance, direction, coordination geometry).
+                nbr_fea
+            ],
+            dim=2  # concatenate along the feature axis → join features, not neighbors or atoms
+                # after concatenation: total_nbr_fea has shape (N, M, 2F + B)
+                # each edge feature vector now contains [center atom, neighbor atom, bond] info
+        )
         total_gated_fea = self.fc_full(total_nbr_fea)
         total_gated_fea = self.bn1(total_gated_fea.view(
             -1, self.atom_fea_len*2)).view(N, M, self.atom_fea_len*2)
