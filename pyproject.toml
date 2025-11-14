@@ -7,7 +7,11 @@ authors = [
     { name = "singularitti", email = "singularitti@outlook.com" }
 ]
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "numpy>=2.3.4",
+    "pymatgen>=2025.10.7",
+    "torch>=2.9.0",
+]
 
 [project.scripts]
 cgcnn = "cgcnn:main"
@@ -15,3 +19,8 @@ cgcnn = "cgcnn:main"
 [build-system]
 requires = ["uv_build>=0.9.5,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipython>=9.6.0",
+]
