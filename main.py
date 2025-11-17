@@ -107,10 +107,11 @@ def main():
         val_size=args.val_size,
         test_size=args.test_size,
         return_test=True)
+    args.n_targets = dataset.n_targets
 
     # obtain target value normalizer
     if args.task == 'classification':
-        normalizer = Normalizer(torch.zeros(2))
+        normalizer = Normalizer(torch.zeros(args.n_targets))
         normalizer.load_state_dict({'mean': 0., 'std': 1.})
     else:
         if len(dataset) < 500:
@@ -133,7 +134,8 @@ def main():
                                 h_fea_len=args.h_fea_len,
                                 n_h=args.n_h,
                                 classification=True if args.task ==
-                                                       'classification' else False)
+                                                       'classification' else False,
+                                n_targets=args.n_targets)
     if args.cuda:
         model.cuda()
 
@@ -358,8 +360,8 @@ def validate(val_loader, model, criterion, normalizer, test=False):
             if test:
                 test_pred = normalizer.denorm(output.data.cpu())
                 test_target = target
-                test_preds += test_pred.view(-1).tolist()
-                test_targets += test_target.view(-1).tolist()
+                test_preds += test_pred.tolist()
+                test_targets += test_target.tolist()
                 test_cif_ids += batch_cif_ids
         else:
             accuracy, precision, recall, fscore, auc_score = \
@@ -410,7 +412,9 @@ def validate(val_loader, model, criterion, normalizer, test=False):
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets,
                                             test_preds):
-                writer.writerow((cif_id, target, pred))
+                writer.writerow([cif_id] +
+                                list(map(float, target)) +
+                                list(map(float, pred)))
     else:
         star_label = '*'
     if args.task == 'regression':
@@ -428,8 +432,14 @@ class Normalizer(object):
 
     def __init__(self, tensor):
         """tensor is taken as a sample to calculate the mean and std"""
-        self.mean = torch.mean(tensor)
-        self.std = torch.std(tensor)
+        tensor = tensor.float()
+        if tensor.ndim == 0:
+            tensor = tensor.view(1, 1)
+        elif tensor.ndim == 1:
+            tensor = tensor.view(1, -1)
+        self.mean = torch.mean(tensor, dim=0)
+        self.std = torch.std(tensor, dim=0, unbiased=False)
+        self.std[self.std == 0] = 1.
 
     def norm(self, tensor):
         return (tensor - self.mean) / self.std
@@ -453,8 +463,8 @@ def mae(prediction, target):
     Parameters
     ----------
 
-    prediction: torch.Tensor (N, 1)
-    target: torch.Tensor (N, 1)
+    prediction: torch.Tensor (N, n_targets)
+    target: torch.Tensor (N, n_targets)
     """
     return torch.mean(torch.abs(target - prediction))
 

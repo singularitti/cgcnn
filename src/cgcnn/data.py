@@ -109,7 +109,7 @@ def collate_pool(dataset_list):
       atom_fea: torch.Tensor shape (n_i, atom_fea_len)
       nbr_fea: torch.Tensor shape (n_i, M, nbr_fea_len)
       nbr_fea_idx: torch.LongTensor shape (n_i, M)
-      target: torch.Tensor shape (1, )
+      target: torch.Tensor shape (n_targets, )
       cif_id: str or int
 
     Returns
@@ -124,7 +124,7 @@ def collate_pool(dataset_list):
       Indices of M neighbors of each atom
     crystal_atom_idx: list of torch.LongTensor of length N0
       Mapping from the crystal idx to atom idx
-    target: torch.Tensor shape (N, 1)
+    target: torch.Tensor shape (N, n_targets)
       Target value for prediction
     batch_cif_ids: list
     """
@@ -262,9 +262,10 @@ class CIFData(Dataset):
     ├── id1.cif
     ├── ...
 
-    id_prop.csv: a CSV file with two columns. The first column recodes a
-    unique ID for each crystal, and the second column recodes the value of
-    target property.
+    id_prop.csv: a CSV file whose first column records a unique ID for each
+    crystal, and every subsequent column stores one target property value.
+    Multiple target properties can be provided per crystal by adding more
+    columns.
 
     atom_init.json: a JSON file that stores the initialization vector for each
     element.
@@ -294,7 +295,7 @@ class CIFData(Dataset):
     atom_fea: torch.Tensor shape (n_i, atom_fea_len)
     nbr_fea: torch.Tensor shape (n_i, M, nbr_fea_len)
     nbr_fea_idx: torch.LongTensor shape (n_i, M)
-    target: torch.Tensor shape (1, )
+    target: torch.Tensor shape (n_targets, )
     cif_id: str or int
     """
     def __init__(self, root_dir, max_num_nbr=12, radius=8, dmin=0, step=0.2,
@@ -306,7 +307,19 @@ class CIFData(Dataset):
         assert os.path.exists(id_prop_file), 'id_prop.csv does not exist!'
         with open(id_prop_file) as f:
             reader = csv.reader(f)
-            self.id_prop_data = [row for row in reader]
+            self.id_prop_data = [row for row in reader if row]
+        if not self.id_prop_data:
+            raise ValueError('id_prop.csv is empty!')
+        self.n_targets = len(self.id_prop_data[0]) - 1
+        if self.n_targets < 1:
+            raise ValueError('id_prop.csv must contain at least one target column.')
+        for row in self.id_prop_data:
+            if len(row) != self.n_targets + 1:
+                raise ValueError(
+                    'All rows in id_prop.csv must have the same number of columns. '
+                    'Expected {} target columns but got {} for id {}.'.format(
+                        self.n_targets, len(row) - 1,
+                        row[0] if row else 'unknown'))
         random.seed(random_seed)
         random.shuffle(self.id_prop_data)
         atom_init_file = os.path.join(self.root_dir, 'atom_init.json')
@@ -319,7 +332,8 @@ class CIFData(Dataset):
 
     @functools.lru_cache(maxsize=None)  # Cache loaded structures
     def __getitem__(self, idx):
-        cif_id, target = self.id_prop_data[idx]
+        row = self.id_prop_data[idx]
+        cif_id, target_values = row[0], row[1:]
         crystal = Structure.from_file(os.path.join(self.root_dir,
                                                    cif_id+'.cif'))
         atom_fea = np.vstack([self.ari.get_atom_fea(crystal[i].specie.number)
@@ -348,5 +362,5 @@ class CIFData(Dataset):
         atom_fea = torch.Tensor(atom_fea)
         nbr_fea = torch.Tensor(nbr_fea)
         nbr_fea_idx = torch.LongTensor(nbr_fea_idx)
-        target = torch.Tensor([float(target)])
+        target = torch.Tensor([float(value) for value in target_values])
         return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id

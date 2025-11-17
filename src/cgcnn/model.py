@@ -116,7 +116,7 @@ class CrystalGraphConvNet(nn.Module):
     """
     def __init__(self, orig_atom_fea_len, nbr_fea_len,
                  atom_fea_len=64, n_conv=3, h_fea_len=128, n_h=1,
-                 classification=False):
+                 classification=False, n_targets=1):
         """
         Initialize CrystalGraphConvNet.
 
@@ -135,9 +135,14 @@ class CrystalGraphConvNet(nn.Module):
           Number of hidden features after pooling
         n_h: int
           Number of hidden layers after pooling
+        classification: bool
+          Whether to perform classification instead of regression
+        n_targets: int
+          Number of regression targets (ignored for classification)
         """
         super(CrystalGraphConvNet, self).__init__()
         self.classification = classification
+        self.n_targets = n_targets
         self.embedding = nn.Linear(orig_atom_fea_len, atom_fea_len)
         self.convs = nn.ModuleList([ConvLayer(atom_fea_len=atom_fea_len,
                                     nbr_fea_len=nbr_fea_len)
@@ -152,7 +157,7 @@ class CrystalGraphConvNet(nn.Module):
         if self.classification:
             self.fc_out = nn.Linear(h_fea_len, 2)
         else:
-            self.fc_out = nn.Linear(h_fea_len, 1)
+            self.fc_out = nn.Linear(h_fea_len, self.n_targets)
         if self.classification:
             self.logsoftmax = nn.LogSoftmax(dim=1)
             self.dropout = nn.Dropout()

@@ -91,11 +91,11 @@ To input crystal structures to CGCNN, you will need to define a customized datas
 Before defining a customized dataset, you will need:
 
 - [CIF](https://en.wikipedia.org/wiki/Crystallographic_Information_File) files recording the structure of the crystals that you are interested in
-- The target properties for each crystal (not needed for predicting, but you need to put some random numbers in `id_prop.csv`)
+- The target properties for each crystal (not needed for predicting, but you need to put some random numbers in `id_prop.csv`. Add one column per target property if you want multi-output regression.)
 
 You can create a customized dataset by creating a directory `root_dir` with the following files: 
 
-1. `id_prop.csv`: a [CSV](https://en.wikipedia.org/wiki/Comma-separated_values) file with two columns. The first column recodes a unique `ID` for each crystal, and the second column recodes the value of target property. If you want to predict material properties with `predict.py`, you can put any number in the second column. (The second column is still needed.)
+1. `id_prop.csv`: a [CSV](https://en.wikipedia.org/wiki/Comma-separated_values) file whose first column records a unique `ID` for each crystal. Every additional column stores one target property value, so you can train on multiple target properties simultaneously by adding more columns. If you only want to predict without known targets, you can still put placeholder numbers in these target columns.
 
 2. `atom_init.json`: a [JSON](https://en.wikipedia.org/wiki/JSON) file that stores the initialization vector for each element. An example of `atom_init.json` is `data/sample-regression/atom_init.json`, which should be good for most applications.
 
@@ -181,7 +181,7 @@ Note that for classification, the predicted values in `test_results.csv` is a pr
 
 After predicting, you will get one file in `cgcnn` directory:
 
-- `test_results.csv`: stores the `ID`, target value, and predicted value for each crystal in test set. Here the target value is just any number that you set while defining the dataset in `id_prop.csv`, which is not important.
+- `test_results.csv`: stores the `ID`, followed by the target value(s) and predicted value(s) for each crystal in the test set. For pure prediction you can fill the target columns in `id_prop.csv` with placeholder numbers.
 
 ## Data
 
@@ -194,6 +194,4 @@ This software was primarily written by [Tian Xie](http://txie.me) who was advise
 ## License
 
 CGCNN is released under the MIT License.
-
-
 

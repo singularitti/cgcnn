@@ -57,6 +57,12 @@ def main():
     test_loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True,
                              num_workers=args.workers, collate_fn=collate_fn,
                              pin_memory=args.cuda)
+    model_target_dim = getattr(model_args, 'n_targets', dataset.n_targets)
+    if (model_args.task == 'regression' and
+            dataset.n_targets != model_target_dim):
+        raise ValueError('The provided CIF dataset has {} target columns but '
+                         'the model was trained with {} targets.'.format(
+                             dataset.n_targets, model_target_dim))
 
     # build model
     structures, _, _ = dataset[0]
@@ -68,7 +74,8 @@ def main():
                                 h_fea_len=model_args.h_fea_len,
                                 n_h=model_args.n_h,
                                 classification=True if model_args.task ==
-                                'classification' else False)
+                                'classification' else False,
+                                n_targets=model_target_dim)
     if args.cuda:
         model.cuda()
 
@@ -87,7 +94,8 @@ def main():
     # else:
     #     raise NameError('Only SGD or Adam is allowed as --optim')
 
-    normalizer = Normalizer(torch.zeros(3))
+    normalizer = Normalizer(torch.zeros(
+        model_target_dim if model_args.task == 'regression' else 1))
 
     # optionally resume from a checkpoint
     if os.path.isfile(args.modelpath):
@@ -162,8 +170,8 @@ def validate(val_loader, model, criterion, normalizer, test=False):
             if test:
                 test_pred = normalizer.denorm(output.data.cpu())
                 test_target = target
-                test_preds += test_pred.view(-1).tolist()
-                test_targets += test_target.view(-1).tolist()
+                test_preds += test_pred.tolist()
+                test_targets += test_target.tolist()
                 test_cif_ids += batch_cif_ids
         else:
             accuracy, precision, recall, fscore, auc_score =\
@@ -214,7 +222,9 @@ def validate(val_loader, model, criterion, normalizer, test=False):
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets,
                                             test_preds):
-                writer.writerow((cif_id, target, pred))
+                writer.writerow([cif_id] +
+                                list(map(float, target)) +
+                                list(map(float, pred)))
     else:
         star_label = '*'
     if model_args.task == 'regression':
@@ -231,8 +241,14 @@ class Normalizer(object):
     """Normalize a Tensor and restore it later. """
     def __init__(self, tensor):
         """tensor is taken as a sample to calculate the mean and std"""
-        self.mean = torch.mean(tensor)
-        self.std = torch.std(tensor)
+        tensor = tensor.float()
+        if tensor.ndim == 0:
+            tensor = tensor.view(1, 1)
+        elif tensor.ndim == 1:
+            tensor = tensor.view(1, -1)
+        self.mean = torch.mean(tensor, dim=0)
+        self.std = torch.std(tensor, dim=0, unbiased=False)
+        self.std[self.std == 0] = 1.
 
     def norm(self, tensor):
         return (tensor - self.mean) / self.std
@@ -256,8 +272,8 @@ def mae(prediction, target):
     Parameters
     ----------
 
-    prediction: torch.Tensor (N, 1)
-    target: torch.Tensor (N, 1)
+    prediction: torch.Tensor (N, n_targets)
+    target: torch.Tensor (N, n_targets)
     """
     return torch.mean(torch.abs(target - prediction))
 
