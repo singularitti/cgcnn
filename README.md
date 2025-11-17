@@ -183,6 +183,25 @@ After predicting, you will get one file in `cgcnn` directory:
 
 - `test_results.csv`: stores the `ID`, followed by the target value(s) and predicted value(s) for each crystal in the test set. For pure prediction you can fill the target columns in `id_prop.csv` with placeholder numbers.
 
+### Use the package programmatically from Python (REPL or script)
+
+Rather than using CLI entry points, you can use the library modules directly from Python. This repository provides `train_model` and `predict_model` functions.
+
+Examples (in a Python REPL or script):
+
+```python
+from cgcnn.training import train_model
+from cgcnn.inference import predict_model
+
+# Train with a dataset directory (use CPU for small examples with cuda=False)
+train_model("data/sample-regression", task="regression", epochs=2, batch_size=2, cuda=False)
+
+# Predict with a trained model and a directory of CIF files
+predict_model("pre-trained/formation-energy-per-atom.pth.tar", "data/sample-regression", batch_size=2, cuda=False)
+```
+
+Both functions mirror the behavior of the old `main.py` and `predict.py` scripts but are provided as library functions to import in your code.
+
 ## Data
 
 To reproduce our paper, you can download the corresponding datasets following the [instruction](data/material-data).
