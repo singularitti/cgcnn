@@ -4,6 +4,9 @@ import torch
 import torch.nn as nn
 
 
+__all__ = ['ConvLayer', 'CrystalGraphConvNet']
+
+
 class ConvLayer(nn.Module):
     """
     Convolutional operation on graphs
