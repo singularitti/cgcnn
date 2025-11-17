@@ -30,8 +30,11 @@ parser.add_argument('--print-freq', '-p', default=10, type=int,
 args = parser.parse_args(sys.argv[1:])
 if os.path.isfile(args.modelpath):
     print("=> loading model params '{}'".format(args.modelpath))
-    model_checkpoint = torch.load(args.modelpath,
-                                  map_location=lambda storage, loc: storage)
+    model_checkpoint = torch.load(
+        args.modelpath,
+        map_location=lambda storage, loc: storage,
+        weights_only=False
+    )
     model_args = argparse.Namespace(**model_checkpoint['args'])
     print("=> loaded model params '{}'".format(args.modelpath))
 else:
@@ -89,8 +92,11 @@ def main():
     # optionally resume from a checkpoint
     if os.path.isfile(args.modelpath):
         print("=> loading model '{}'".format(args.modelpath))
-        checkpoint = torch.load(args.modelpath,
-                                map_location=lambda storage, loc: storage)
+        checkpoint = torch.load(
+            args.modelpath,
+            map_location=lambda storage, loc: storage,
+            weights_only=False
+        )
         model.load_state_dict(checkpoint['state_dict'])
         normalizer.load_state_dict(checkpoint['normalizer'])
         print("=> loaded model '{}' (epoch {}, validation {})"
