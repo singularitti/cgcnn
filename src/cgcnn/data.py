@@ -368,7 +368,7 @@ class CIFData(Dataset):
                                         nbr[:self.max_num_nbr])))
         nbr_fea_idx, nbr_fea = np.array(nbr_fea_idx), np.array(nbr_fea)
         nbr_fea = self.gdf.expand(nbr_fea)
-        atom_fea = torch.Tensor(atom_fea)
+        atom_fea = torch.Tensor(atom_fea)  # This line is useless
         nbr_fea = torch.Tensor(nbr_fea)
         nbr_fea_idx = torch.LongTensor(nbr_fea_idx)
         target = torch.Tensor([float(value) for value in target_values])
