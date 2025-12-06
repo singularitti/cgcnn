@@ -2,7 +2,6 @@
 Training utilities and high-level train function for CGCNN.
 This refactors the previous `main.py` logic into importable functions.
 """
-from __future__ import annotations
 
 import os
 import sys
@@ -10,7 +9,6 @@ import time
 import warnings
 from random import sample
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -147,7 +145,9 @@ def train_model(
     else:
         criterion = nn.MSELoss()
     if optim_name == "SGD":
-        optimizer = optim.SGD(model.parameters(), lr, momentum=momentum, weight_decay=weight_decay)
+        optimizer = optim.SGD(
+            model.parameters(), lr, momentum=momentum, weight_decay=weight_decay
+        )
     elif optim_name == "Adam":
         optimizer = optim.Adam(model.parameters(), lr, weight_decay=weight_decay)
     else:
@@ -169,7 +169,17 @@ def train_model(
     # training loop
     best_checkpoint_path = None
     for epoch in range(start_epoch, epochs):
-        _train_epoch(train_loader, model, criterion, optimizer, epoch, normalizer, cuda, task, print_freq)
+        _train_epoch(
+            train_loader,
+            model,
+            criterion,
+            optimizer,
+            epoch,
+            normalizer,
+            cuda,
+            task,
+            print_freq,
+        )
         mae_error = _validate(val_loader, model, criterion, normalizer, cuda, task)
         if mae_error != mae_error:
             sys.exit(1)
@@ -203,7 +213,9 @@ def train_model(
     return best_checkpoint_path
 
 
-def _train_epoch(train_loader, model, criterion, optimizer, epoch, normalizer, cuda, task, print_freq):
+def _train_epoch(
+    train_loader, model, criterion, optimizer, epoch, normalizer, cuda, task, print_freq
+):
     # Simple version of original main.train that uses local arguments
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -245,7 +257,9 @@ def _train_epoch(train_loader, model, criterion, optimizer, epoch, normalizer, c
             losses.update(loss.data.cpu().item(), target.size(0))
             mae_errors.update(mae_error, target.size(0))
         else:
-            accuracy, precision, recall, fscore, auc_score = class_eval(output.data.cpu(), target)
+            accuracy, precision, recall, fscore, auc_score = class_eval(
+                output.data.cpu(), target
+            )
             losses.update(loss.data.cpu().item(), target.size(0))
             accuracies.update(accuracy, target.size(0))
             precisions.update(precision, target.size(0))
@@ -354,7 +368,9 @@ def _validate(val_loader, model, criterion, normalizer, cuda, task, test=False):
                 test_targets += test_target.tolist()
                 test_cif_ids += batch_cif_ids
         else:
-            accuracy, precision, recall, fscore, auc_score = class_eval(output.data.cpu(), target)
+            accuracy, precision, recall, fscore, auc_score = class_eval(
+                output.data.cpu(), target
+            )
             losses.update(loss.data.cpu().item(), target.size(0))
             accuracies.update(accuracy, target.size(0))
             precisions.update(precision, target.size(0))
@@ -378,7 +394,11 @@ def _validate(val_loader, model, criterion, normalizer, cuda, task, test=False):
                     "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
                     "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
                     "MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})".format(
-                        i, len(val_loader), batch_time=batch_time, loss=losses, mae_errors=mae_errors
+                        i,
+                        len(val_loader),
+                        batch_time=batch_time,
+                        loss=losses,
+                        mae_errors=mae_errors,
                     )
                 )
             else:
@@ -410,11 +430,17 @@ def _validate(val_loader, model, criterion, normalizer, cuda, task, test=False):
         with open("test_results.csv", "w") as f:
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets, test_preds):
-                writer.writerow([cif_id] + list(map(float, target)) + list(map(float, pred)))
+                writer.writerow(
+                    [cif_id] + list(map(float, target)) + list(map(float, pred))
+                )
     else:
         star_label = "*"
     if task == "regression":
-        print(" {star} MAE {mae_errors.avg:.3f}".format(star=star_label, mae_errors=mae_errors))
+        print(
+            " {star} MAE {mae_errors.avg:.3f}".format(
+                star=star_label, mae_errors=mae_errors
+            )
+        )
         return mae_errors.avg
     else:
         print(" {star} AUC {auc.avg:.3f}".format(star=star_label, auc=auc_scores))

@@ -2,7 +2,6 @@
 Shared utilities used by training and inference modules.
 This file contains Normalizer, mae, class_eval, AverageMeter, and save_checkpoint.
 """
-from __future__ import annotations
 
 import shutil
 import numpy as np
@@ -19,7 +18,7 @@ __all__ = [
 
 
 class Normalizer(object):
-    """Normalize a Tensor and restore it later. """
+    """Normalize a Tensor and restore it later."""
 
     def __init__(self, tensor: torch.Tensor):
         """tensor is taken as a sample to calculate the mean and std"""
@@ -31,7 +30,7 @@ class Normalizer(object):
         self.mean = torch.mean(tensor, dim=0)
         self.std = torch.std(tensor, dim=0, unbiased=False)
         # Avoid division-by-zero for features with 0 std
-        self.std[self.std == 0] = 1.
+        self.std[self.std == 0] = 1.0
 
     def norm(self, tensor: torch.Tensor) -> torch.Tensor:
         return (tensor - self.mean) / self.std

@@ -1,7 +1,6 @@
 """
 Inference utilities for CGCNN; refactors predict.py into importable functions.
 """
-from __future__ import annotations
 
 import os
 import time
@@ -19,7 +18,14 @@ from .utils import Normalizer, mae, class_eval, AverageMeter
 __all__ = ["predict_model"]
 
 
-def predict_model(modelpath: str, cifpath: str, batch_size: int = 256, workers: int = 0, cuda: bool | None = None, print_freq: int = 10):
+def predict_model(
+    modelpath: str,
+    cifpath: str,
+    batch_size: int = 256,
+    workers: int = 0,
+    cuda: bool | None = None,
+    print_freq: int = 10,
+):
     """Load a model from a saved checkpoint and predict on CIF files in `cifpath`.
 
     Returns the path to the CSV file written (`test_results.csv`) or None on failure.
@@ -34,10 +40,23 @@ def predict_model(modelpath: str, cifpath: str, batch_size: int = 256, workers: 
 
     dataset = CIFData(cifpath)
     collate_fn = collate_pool
-    test_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=workers, collate_fn=collate_fn, pin_memory=cuda)
-    model_target_dim = getattr(model_args, "n_targets", None) or getattr(model_args, "n_out", None) or dataset.n_targets
-    if model_args.task == 'regression' and dataset.n_targets != model_target_dim:
-        raise ValueError("Dataset target dimensionality doesn't match model checkpoint.")
+    test_loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=workers,
+        collate_fn=collate_fn,
+        pin_memory=cuda,
+    )
+    model_target_dim = (
+        getattr(model_args, "n_targets", None)
+        or getattr(model_args, "n_out", None)
+        or dataset.n_targets
+    )
+    if model_args.task == "regression" and dataset.n_targets != model_target_dim:
+        raise ValueError(
+            "Dataset target dimensionality doesn't match model checkpoint."
+        )
 
     structures, _, _ = dataset[0]
     orig_atom_fea_len = structures[0].shape[-1]
@@ -49,26 +68,32 @@ def predict_model(modelpath: str, cifpath: str, batch_size: int = 256, workers: 
         n_conv=model_args.n_conv,
         h_fea_len=model_args.h_fea_len,
         n_h=model_args.n_h,
-        classification=True if model_args.task == 'classification' else False,
+        classification=True if model_args.task == "classification" else False,
         n_targets=model_target_dim,
     )
     if cuda:
         model.cuda()
 
-    if model_args.task == 'classification':
+    if model_args.task == "classification":
         criterion = nn.NLLLoss()
     else:
         criterion = nn.MSELoss()
 
-    normalizer = Normalizer(torch.zeros(model_target_dim if model_args.task == 'regression' else 1))
+    normalizer = Normalizer(
+        torch.zeros(model_target_dim if model_args.task == "regression" else 1)
+    )
     model.load_state_dict(checkpoint["state_dict"])  # will raise on mismatch
     normalizer.load_state_dict(checkpoint.get("normalizer", normalizer.state_dict()))
 
-    out_csv = _validate(test_loader, model, criterion, normalizer, cuda, print_freq, model_args.task)
+    out_csv = _validate(
+        test_loader, model, criterion, normalizer, cuda, print_freq, model_args.task
+    )
     return out_csv
 
 
-def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, test=True):
+def _validate(
+    val_loader, model, criterion, normalizer, cuda, print_freq, task, test=True
+):
     batch_time = AverageMeter()
     losses = AverageMeter()
     # Always initialize metrics and testing lists to avoid warnings
@@ -95,7 +120,7 @@ def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, 
                 )
             else:
                 input_var = (Variable(input[0]), Variable(input[1]), input[2], input[3])
-        if task == 'regression':
+        if task == "regression":
             target_normed = normalizer.norm(target)
         else:
             target_normed = target.view(-1).long()
@@ -108,7 +133,7 @@ def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, 
         output = model(*input_var)
         loss = criterion(output, target_var)
 
-        if task == 'regression':
+        if task == "regression":
             mae_error = mae(normalizer.denorm(output.data.cpu()), target)
             losses.update(loss.data.cpu().item(), target.size(0))
             mae_errors.update(mae_error, target.size(0))
@@ -119,7 +144,9 @@ def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, 
                 test_targets += test_target.tolist()
                 test_cif_ids += batch_cif_ids
         else:
-            accuracy, precision, recall, fscore, auc_score = class_eval(output.data.cpu(), target)
+            accuracy, precision, recall, fscore, auc_score = class_eval(
+                output.data.cpu(), target
+            )
             losses.update(loss.data.cpu().item(), target.size(0))
             accuracies.update(accuracy, target.size(0))
             precisions.update(precision, target.size(0))
@@ -143,7 +170,11 @@ def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, 
                     "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
                     "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
                     "MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})".format(
-                        i, len(val_loader), batch_time=batch_time, loss=losses, mae_errors=mae_errors
+                        i,
+                        len(val_loader),
+                        batch_time=batch_time,
+                        loss=losses,
+                        mae_errors=mae_errors,
                     )
                 )
             else:
@@ -171,13 +202,16 @@ def _validate(val_loader, model, criterion, normalizer, cuda, print_freq, task, 
     if test:
         out_csv = "test_results.csv"
         import csv
+
         with open(out_csv, "w") as f:
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets, test_preds):
-                writer.writerow([cif_id] + list(map(float, target)) + list(map(float, pred)))
+                writer.writerow(
+                    [cif_id] + list(map(float, target)) + list(map(float, pred))
+                )
         return out_csv
     else:
-        if task == 'regression':
+        if task == "regression":
             print(" MAE {mae_errors.avg:.3f}".format(mae_errors=mae_errors))
             return mae_errors.avg
         else:
