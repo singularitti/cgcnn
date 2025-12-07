@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 
 from .data import CIFData, collate_pool
 from .model import CrystalGraphConvNet
-from .utils import Normalizer, mae, class_eval, AverageMeter
+from .utils import Normalizer, mae, class_eval, AverageMeter, _validate
 
 __all__ = ["predict_model"]
 
@@ -108,134 +108,13 @@ def predict_model(
         )
 
     out_csv = _validate(
-        test_loader, model, criterion, normalizer, cuda, print_freq, task
+        test_loader,
+        model,
+        criterion,
+        normalizer,
+        cuda,
+        task,
+        test=True,
+        print_freq=print_freq,
     )
     return out_csv
-
-
-def _validate(
-    val_loader, model, criterion, normalizer, cuda, print_freq, task, test=True
-):
-    batch_time = AverageMeter()
-    losses = AverageMeter()
-    # Always initialize metrics and testing lists to avoid warnings
-    mae_errors = AverageMeter()
-    accuracies = AverageMeter()
-    precisions = AverageMeter()
-    recalls = AverageMeter()
-    fscores = AverageMeter()
-    auc_scores = AverageMeter()
-    test_targets = []
-    test_preds = []
-    test_cif_ids = []
-
-    model.eval()
-    end = time.time()
-    for i, (input, target, batch_cif_ids) in enumerate(val_loader):
-        with torch.no_grad():
-            if cuda:
-                input_var = (
-                    Variable(input[0].cuda(non_blocking=True)),
-                    Variable(input[1].cuda(non_blocking=True)),
-                    input[2].cuda(non_blocking=True),
-                    [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]],
-                )
-            else:
-                input_var = (Variable(input[0]), Variable(input[1]), input[2], input[3])
-        if task == "regression":
-            target_normed = normalizer.norm(target)
-        else:
-            target_normed = target.view(-1).long()
-        with torch.no_grad():
-            if cuda:
-                target_var = Variable(target_normed.cuda(non_blocking=True))
-            else:
-                target_var = Variable(target_normed)
-
-        output = model(*input_var)
-        loss = criterion(output, target_var)
-
-        if task == "regression":
-            mae_error = mae(normalizer.denorm(output.data.cpu()), target)
-            losses.update(loss.data.cpu().item(), target.size(0))
-            mae_errors.update(mae_error, target.size(0))
-            if test:
-                test_pred = normalizer.denorm(output.data.cpu())
-                test_target = target
-                test_preds += test_pred.tolist()
-                test_targets += test_target.tolist()
-                test_cif_ids += batch_cif_ids
-        else:
-            accuracy, precision, recall, fscore, auc_score = class_eval(
-                output.data.cpu(), target
-            )
-            losses.update(loss.data.cpu().item(), target.size(0))
-            accuracies.update(accuracy, target.size(0))
-            precisions.update(precision, target.size(0))
-            recalls.update(recall, target.size(0))
-            fscores.update(fscore, target.size(0))
-            auc_scores.update(auc_score, target.size(0))
-            if test:
-                test_pred = torch.exp(output.data.cpu())
-                test_target = target
-                assert test_pred.shape[1] == 2
-                test_preds += test_pred[:, 1].tolist()
-                test_targets += test_target.view(-1).tolist()
-                test_cif_ids += batch_cif_ids
-
-        batch_time.update(time.time() - end)
-        end = time.time()
-        if i % print_freq == 0:
-            if task == "regression":
-                print(
-                    "Test: [{0}/{1}]\t"
-                    "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                    "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
-                    "MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})".format(
-                        i,
-                        len(val_loader),
-                        batch_time=batch_time,
-                        loss=losses,
-                        mae_errors=mae_errors,
-                    )
-                )
-            else:
-                print(
-                    "Test: [{0}/{1}]\t"
-                    "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                    "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
-                    "Accu {accu.val:.3f} ({accu.avg:.3f})\t"
-                    "Precision {prec.val:.3f} ({prec.avg:.3f})\t"
-                    "Recall {recall.val:.3f} ({recall.avg:.3f})\t"
-                    "F1 {f1.val:.3f} ({f1.avg:.3f})\t"
-                    "AUC {auc.val:.3f} ({auc.avg:.3f})".format(
-                        i,
-                        len(val_loader),
-                        batch_time=batch_time,
-                        loss=losses,
-                        accu=accuracies,
-                        prec=precisions,
-                        recall=recalls,
-                        f1=fscores,
-                        auc=auc_scores,
-                    )
-                )
-
-    if test:
-        out_csv = "test_results.csv"
-        import csv
-
-        with open(out_csv, "w") as f:
-            writer = csv.writer(f)
-            for cif_id, target, pred in zip(test_cif_ids, test_targets, test_preds):
-                writer.writerow(
-                    [cif_id] + list(map(float, target)) + list(map(float, pred))
-                )
-        return out_csv
-    else:
-        if task == "regression":
-            print(" MAE {mae_errors.avg:.3f}".format(mae_errors=mae_errors))
-            return mae_errors.avg
-        else:
-            print(" AUC {auc.avg:.3f}".format(auc=auc_scores))
-            return auc_scores.avg
