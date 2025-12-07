@@ -64,7 +64,6 @@ def train_model(
     val_size: int | None = None,
     test_size: int | None = None,
     resume: str | None = None,
-    save_dir: str | None = None,
 ):
     """Train a CGCNN model.
 
