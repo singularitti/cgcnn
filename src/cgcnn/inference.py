@@ -3,16 +3,14 @@ Inference utilities for CGCNN; refactors predict.py into importable functions.
 """
 
 import os
-import time
 
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
 from .data import CIFData, collate_pool
 from .model import CrystalGraphConvNet
-from .utils import Normalizer, mae, class_eval, AverageMeter, _validate
+from .utils import Normalizer, _validate
 
 __all__ = ["predict_model"]
 
