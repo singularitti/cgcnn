@@ -4,6 +4,8 @@ import random
 import shutil
 import subprocess
 import sys
+import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -11,7 +13,6 @@ import torch
 
 from cgcnn.data import CIFData
 from cgcnn.training import train_model
-
 
 DEFAULT_SEARCH_SPACE = {
     "optim_name": ["Adam"],
@@ -23,6 +24,20 @@ DEFAULT_SEARCH_SPACE = {
     "weight_decay": [0.0, 1e-6, 1e-5, 1e-4],
     "n_h": [2, 3],
 }
+
+
+def now_utc_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write_tune_status(root_out, state, note=""):
+    root_out.mkdir(parents=True, exist_ok=True)
+    status_path = root_out / "STATUS.txt"
+    with status_path.open("w") as f:
+        f.write(f"state={state}\n")
+        f.write(f"time_utc={now_utc_iso()}\n")
+        if note:
+            f.write(f"note={note}\n")
 
 
 def set_seed(seed):
@@ -670,7 +685,24 @@ def orchestrate_mode(args):
         return 2
     data_dir = Path(args[1]).expanduser().resolve()
     root_out = Path(args[2]).expanduser().resolve()
-    orchestrate(data_dir, root_out)
+    write_tune_status(root_out, "RUNNING", "tuning_started")
+    error_path = root_out / "ERROR.txt"
+    if error_path.exists():
+        error_path.unlink()
+    try:
+        orchestrate(data_dir, root_out)
+    except Exception as exc:
+        write_tune_status(root_out, "FAILED", str(exc))
+        with error_path.open("w") as f:
+            f.write(f"time_utc={now_utc_iso()}\n")
+            f.write(f"error={exc}\n\n")
+            f.write(traceback.format_exc())
+        return 1
+    except KeyboardInterrupt:
+        write_tune_status(root_out, "INTERRUPTED", "keyboard_interrupt")
+        return 130
+    else:
+        write_tune_status(root_out, "SUCCESS", "tuning_finished")
     return 0
 
 
