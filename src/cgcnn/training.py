@@ -4,7 +4,6 @@ This refactors the previous `main.py` logic into importable functions.
 """
 
 import os
-import sys
 import time
 import warnings
 from random import sample
@@ -192,7 +191,7 @@ def train_model(
             print_freq=10,
         )
         if mae_error != mae_error:
-            sys.exit(1)
+            raise RuntimeError("Training diverged: validation MAE is NaN")
         scheduler.step()
         if task == "regression":
             is_best = mae_error < best_mae_error
