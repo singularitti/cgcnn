@@ -7,6 +7,7 @@ This document explains how to run the CGCNN hyperparameter tuning pipeline, unde
 The tuning pipeline (`scripts/tune_cif_nh2_v3.py`) performs a **randomized grid search** over the hyperparameter space. It trains multiple models with different hyperparameter configurations, validates each one, and reports comprehensive metrics.
 
 **Key Facts:**
+
 - **Dataset**: Crystal structure files (CIF format) + target property (regression)
 - **Training approach**: 12 epochs per trial (early stopping ready)
 - **Validation strategy**: 3-fold random split (train/validation/test)
@@ -19,16 +20,16 @@ The tuning pipeline (`scripts/tune_cif_nh2_v3.py`) performs a **randomized grid 
 
 The tuning searches over these hyperparameters:
 
-| Parameter | Values | Count | Description |
-|-----------|--------|-------|-------------|
-| `optim_name` | Adam | 1 | Optimizer (Adam only) |
-| `lr` | 0.03, 0.01, 0.005, 0.003, 0.001 | 5 | Learning rate (Adam) |
-| `batch_size` | 32, 64, 128 | 3 | Training batch size |
-| `n_conv` | 2, 3, 4, 5 | 4 | Number of convolution layers |
-| `atom_fea_len` | 64, 96, 128 | 3 | Atomic feature length (dimension) |
-| `h_fea_len` | 64, 128, 256, 384 | 4 | Hidden feature length (dimension) |
-| `weight_decay` | 0.0, 1e-6, 1e-5, 1e-4 | 4 | L2 regularization strength |
-| `n_h` | 2, 3 | 2 | Number of graph attention heads |
+| Parameter      | Values                          | Count | Description                       |
+| -------------- | ------------------------------- | ----- | --------------------------------- |
+| `optim_name`   | Adam                            | 1     | Optimizer (Adam only)             |
+| `lr`           | 0.03, 0.01, 0.005, 0.003, 0.001 | 5     | Learning rate (Adam)              |
+| `batch_size`   | 32, 64, 128                     | 3     | Training batch size               |
+| `n_conv`       | 2, 3, 4, 5                      | 4     | Number of convolution layers      |
+| `atom_fea_len` | 64, 96, 128                     | 3     | Atomic feature length (dimension) |
+| `h_fea_len`    | 64, 128, 256, 384               | 4     | Hidden feature length (dimension) |
+| `weight_decay` | 0.0, 1e-6, 1e-5, 1e-4           | 4     | L2 regularization strength        |
+| `n_h`          | 2, 3                            | 2     | Number of graph attention heads   |
 
 **Total possible combinations**: 5 × 3 × 4 × 3 × 4 × 4 × 2 = 4,320
 **Actually tested**: 12 randomly sampled configurations × 3 seeds
@@ -98,6 +99,7 @@ cat runs/cif_nh2_tuning_full/STATUS.txt
 ```
 
 Output:
+
 ```
 state=FAILED
 time_utc=2026-02-06T15:23:29.441803+00:00
@@ -116,6 +118,7 @@ head -5 runs/cif_nh2_tuning_full/sampled_hyperparameters.csv
 ```
 
 Example output:
+
 ```
 config_id,optim_name,lr,batch_size,n_conv,atom_fea_len,h_fea_len,weight_decay,n_h
 cfg_01,Adam,0.001,64,4,96,256,0.0001,2
@@ -133,6 +136,7 @@ cat runs/cif_nh2_tuning_full/cfg_01/seed_2026/run_result.csv
 ```
 
 Example output:
+
 ```
 status,seed,epochs,best_val_mae,best_model,test_mae,outlier_abs_gt_10_count,max_abs_diff,p95_abs_diff,optim_name,lr,batch_size,n_conv,atom_fea_len,h_fea_len,weight_decay,n_h,error
 
@@ -141,20 +145,21 @@ ok,2026,12,7.245489120483398,/path/to/model_best.pth.tar,5.7979430908387,18,53.8
 
 **Columns explained:**
 
-| Column | Meaning | Example |
-|--------|---------|---------|
-| `status` | Success/failure of trial | `ok`, `failed` |
-| `seed` | Random seed used | 2026 |
-| `epochs` | Epochs trained | 12 |
-| `best_val_mae` | Best validation MAE during training | 7.25 |
-| `test_mae` | **Final test set MAE** (lower is better) | 5.80 |
-| `outlier_abs_gt_10_count` | # of predictions with error > 10 | 18 |
-| `max_abs_diff` | Largest prediction error | 53.87 |
-| `p95_abs_diff` | 95th percentile of errors | 26.60 |
-| `error` | Error message if failed | (empty if ok) |
-| Remaining columns | Hyperparameters used | Adam, lr=0.001, ... |
+| Column                    | Meaning                                  | Example             |
+| ------------------------- | ---------------------------------------- | ------------------- |
+| `status`                  | Success/failure of trial                 | `ok`, `failed`      |
+| `seed`                    | Random seed used                         | 2026                |
+| `epochs`                  | Epochs trained                           | 12                  |
+| `best_val_mae`            | Best validation MAE during training      | 7.25                |
+| `test_mae`                | **Final test set MAE** (lower is better) | 5.80                |
+| `outlier_abs_gt_10_count` | # of predictions with error > 10         | 18                  |
+| `max_abs_diff`            | Largest prediction error                 | 53.87               |
+| `p95_abs_diff`            | 95th percentile of errors                | 26.60               |
+| `error`                   | Error message if failed                  | (empty if ok)       |
+| Remaining columns         | Hyperparameters used                     | Adam, lr=0.001, ... |
 
 **Key metrics to compare trials:**
+
 1. **`test_mae`** — Primary metric. Lower is better. This is the MAE on unseen test structures.
 2. **`best_val_mae`** — Validation MAE during training. Should be similar to test MAE (if similar → good generalization).
 3. **`outlier_abs_gt_10_count`** — Number of "bad" predictions. Fewer is better.
@@ -167,6 +172,7 @@ head -10 runs/cif_nh2_tuning_full/cfg_01/seed_2026/test_results.csv
 ```
 
 Output:
+
 ```
 id,target,prediction,diff,mae
 pos_1157,3.1059999466,2.6373505592,0.4686493874,0.4686493874
@@ -176,6 +182,7 @@ pos_1132,3.6989998817,2.9840912819,0.7149085999,0.7149085999
 ```
 
 **Columns:**
+
 - `id` — Structure ID (from your CIF dataset)
 - `target` — True property value
 - `prediction` — Model's predicted value
@@ -183,6 +190,7 @@ pos_1132,3.6989998817,2.9840912819,0.7149085999,0.7149085999
 - `mae` — |prediction - target| (always positive, used to compute test_mae)
 
 **Use this to:**
+
 - Find structures with large errors (high `mae` values)
 - Analyze which materials the model struggles with
 - Create error histograms or scatter plots (prediction vs target)
@@ -196,6 +204,7 @@ cat runs/cif_nh2_tuning_full/cfg_01/seed_2026/test_examples.csv | head
 ```
 
 Each file contains a single column with structure IDs used in that set. Example:
+
 ```
 pos_1
 pos_100
@@ -203,6 +212,7 @@ pos_1000
 ```
 
 This shows exactly which 1314 structures were in each set:
+
 - **Train set**: Used to optimize weights
 - **Validation set**: Used to check for overfitting during training
 - **Test set**: Never seen during training, used to evaluate final performance
@@ -238,6 +248,7 @@ This shows min/average/max test MAE for each configuration across its 3 seeds.
 ### Analyze variance across seeds
 
 If test MAE differs greatly across seeds for the same config, the model is **sensitive to initialization**:
+
 - Large variance → unstable training
 - Small variance → robust hyperparameters
 
@@ -272,6 +283,7 @@ tail -f runs/cif_nh2_tuning_full/*/seed_*/run_result.csv
 ```
 
 This will:
+
 1. **Sample 12 random hyperparameter configurations** from the search space
 2. **Train 3 trials per configuration** with different random seeds (36 trials total)
 3. **Evaluate each trial** on a held-out test set
