@@ -33,9 +33,19 @@ warnings.filterwarnings(
 )
 
 
-def build_run_dir(runs_root: Path) -> Path:
+def apply_transform(value: float, transform: str) -> float:
+    if transform == "raw":
+        return value
+    if transform == "sqrt":
+        return math.sqrt(value)
+    if transform == "cbrt":
+        return value ** (1.0 / 3.0)
+    raise ValueError(f"Unsupported transform: {transform}")
+
+
+def build_run_dir(runs_root: Path, transform: str) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_root / f"cgcnn_magnetization_{timestamp}"
+    run_dir = runs_root / f"cgcnn_magnetization_{transform}_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_dir
 
@@ -107,36 +117,28 @@ def collect_records(summary_csv: Path, source_root: Path) -> list[dict]:
     return records
 
 
-def compute_standardization(records: list[dict]) -> tuple[float, float]:
-    values = [record["raw_m"] for record in records]
-    mean = math.fsum(values) / len(values)
-    variance = math.fsum((value - mean) ** 2 for value in values) / len(values)
-    std = math.sqrt(variance)
-    if std == 0:
-        std = 1.0
-    return mean, std
-
-
-def write_targets(records: list[dict], run_dir: Path, mean: float, std: float) -> None:
+def write_targets(records: list[dict], run_dir: Path, transform: str) -> None:
     id_prop_path = run_dir / "id_prop.csv"
-    normalized_path = run_dir / "magnetization_per_volume.csv"
+    transformed_path = run_dir / "magnetization_per_volume.csv"
 
     with id_prop_path.open("w", newline="") as id_prop_handle:
         writer = csv.writer(id_prop_handle)
         for record in records:
-            normalized_m = (record["raw_m"] - mean) / std
-            record["normalized_m"] = normalized_m
-            writer.writerow([record["material_id"], f"{normalized_m:.16g}"])
+            transformed_m = apply_transform(record["raw_m"], transform)
+            record["transformed_m"] = transformed_m
+            writer.writerow([record["material_id"], f"{transformed_m:.16g}"])
 
-    with normalized_path.open("w", newline="") as normalized_handle:
-        writer = csv.writer(normalized_handle)
-        writer.writerow(["material_id", "magnetization_per_volume", "normalized_M"])
+    with transformed_path.open("w", newline="") as transformed_handle:
+        writer = csv.writer(transformed_handle)
+        writer.writerow(
+            ["material_id", "magnetization_per_volume", f"{transform}_magnetization"]
+        )
         for record in records:
             writer.writerow(
                 [
                     record["material_id"],
                     f"{record['raw_m']:.16g}",
-                    f"{record['normalized_m']:.16g}",
+                    f"{record['transformed_m']:.16g}",
                 ]
             )
 
@@ -164,8 +166,7 @@ def write_metadata(
     run_dir: Path,
     summary_csv: Path,
     source_root: Path,
-    mean: float,
-    std: float,
+    transform: str,
     epochs: int,
     batch_size: int,
     workers: int,
@@ -175,13 +176,11 @@ def write_metadata(
         "summary_csv": str(summary_csv),
         "source_root": str(source_root),
         "dataset_size": len(records),
-        "target": "normalized(total_magnetization / volume)",
-        "normalization": {
-            "method": "zscore",
-            "mean": mean,
-            "std": std,
-            "min_raw_m": min(raw_values),
-            "max_raw_m": max(raw_values),
+        "target": "total_magnetization / volume",
+        "target_transform": transform,
+        "value_range": {
+            "min_M": min(raw_values),
+            "max_M": max(raw_values),
         },
         "training": {
             "epochs": epochs,
@@ -201,6 +200,7 @@ def prepare_dataset(
     source_root: Path,
     summary_csv: Path,
     runs_root: Path,
+    transform: str,
     epochs: int,
     batch_size: int,
     workers: int,
@@ -209,9 +209,8 @@ def prepare_dataset(
     records = collect_records(summary_csv, source_root)
     print(f"Validated {len(records)} materials", flush=True)
 
-    run_dir = build_run_dir(runs_root)
-    mean, std = compute_standardization(records)
-    write_targets(records, run_dir, mean, std)
+    run_dir = build_run_dir(runs_root, transform)
+    write_targets(records, run_dir, transform)
     write_atom_init(run_dir)
     link_cifs(records, run_dir)
     write_metadata(
@@ -219,8 +218,7 @@ def prepare_dataset(
         run_dir=run_dir,
         summary_csv=summary_csv,
         source_root=source_root,
-        mean=mean,
-        std=std,
+        transform=transform,
         epochs=epochs,
         batch_size=batch_size,
         workers=workers,
@@ -258,11 +256,13 @@ if __name__ == "__main__":
     epochs = int(sys.argv[4]) if len(sys.argv) > 4 else 30
     batch_size = int(sys.argv[5]) if len(sys.argv) > 5 else 64
     workers = int(sys.argv[6]) if len(sys.argv) > 6 else 4
+    transform = sys.argv[7] if len(sys.argv) > 7 else "raw"
 
     run_dir = prepare_dataset(
         source_root=source_root,
         summary_csv=summary_csv,
         runs_root=runs_root,
+        transform=transform,
         epochs=epochs,
         batch_size=batch_size,
         workers=workers,

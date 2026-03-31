@@ -11,6 +11,25 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
+def invert_transform(values: np.ndarray, transform: str) -> np.ndarray:
+    if transform == "raw":
+        return values
+    if transform == "sqrt":
+        return np.square(values)
+    if transform == "cbrt":
+        return np.power(values, 3)
+    raise ValueError(f"Unsupported transform: {transform}")
+
+
+def load_transform(run_dir: Path) -> str:
+    metadata_path = run_dir / "run_metadata.json"
+    if not metadata_path.exists():
+        return "raw"
+    with metadata_path.open() as handle:
+        metadata = json.load(handle)
+    return metadata.get("target_transform", "raw")
+
+
 def load_results(test_results_csv: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
     material_ids: list[str] = []
     targets: list[float] = []
@@ -32,19 +51,36 @@ def load_results(test_results_csv: Path) -> tuple[list[str], np.ndarray, np.ndar
 
 
 def compute_metrics(targets: np.ndarray, predictions: np.ndarray) -> dict[str, float]:
+    if targets.size == 0 or predictions.size == 0:
+        raise ValueError("Cannot compute metrics on empty arrays.")
     residuals = predictions - targets
-    pearson_r = float(np.corrcoef(targets, predictions)[0, 1])
+    pearson_r = None
+    spearman_r = None
+    r2 = None
+    if targets.size >= 2 and predictions.size >= 2:
+        pearson_matrix = np.corrcoef(targets, predictions)
+        pearson_value = pearson_matrix[0, 1]
+        if not np.isnan(pearson_value):
+            pearson_r = float(pearson_value)
 
-    target_ranks = np.argsort(np.argsort(targets))
-    prediction_ranks = np.argsort(np.argsort(predictions))
-    spearman_r = float(np.corrcoef(target_ranks, prediction_ranks)[0, 1])
+        target_ranks = np.argsort(np.argsort(targets))
+        prediction_ranks = np.argsort(np.argsort(predictions))
+        spearman_value = np.corrcoef(target_ranks, prediction_ranks)[0, 1]
+        if not np.isnan(spearman_value):
+            spearman_r = float(spearman_value)
+        try:
+            r2_value = r2_score(targets, predictions)
+        except ValueError:
+            r2_value = np.nan
+        if not np.isnan(r2_value):
+            r2 = float(r2_value)
 
     return {
         "count": int(targets.shape[0]),
         "pearson_r": pearson_r,
-        "pearson_r_squared": pearson_r**2,
+        "pearson_r_squared": pearson_r**2 if pearson_r is not None else None,
         "spearman_rho": spearman_r,
-        "r2_score": float(r2_score(targets, predictions)),
+        "r2_score": r2,
         "mae": float(mean_absolute_error(targets, predictions)),
         "rmse": float(math.sqrt(mean_squared_error(targets, predictions))),
         "bias": float(np.mean(residuals)),
@@ -56,6 +92,11 @@ def compute_metrics(targets: np.ndarray, predictions: np.ndarray) -> dict[str, f
 def make_plot(
     targets: np.ndarray, predictions: np.ndarray, metrics: dict[str, float], output_png: Path
 ) -> None:
+    def format_metric(value) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:.4f}"
+
     combined_min = float(min(np.min(targets), np.min(predictions)))
     combined_max = float(max(np.max(targets), np.max(predictions)))
     padding = 0.03 * (combined_max - combined_min) if combined_max > combined_min else 0.1
@@ -75,10 +116,10 @@ def make_plot(
     text = "\n".join(
         [
             f"N = {metrics['count']}",
-            f"R = {metrics['pearson_r']:.4f}",
-            f"R^2 = {metrics['r2_score']:.4f}",
-            f"MAE = {metrics['mae']:.4f}",
-            f"RMSE = {metrics['rmse']:.4f}",
+            f"R = {format_metric(metrics['pearson_r'])}",
+            f"R^2 = {format_metric(metrics['r2_score'])}",
+            f"MAE = {format_metric(metrics['mae'])}",
+            f"RMSE = {format_metric(metrics['rmse'])}",
         ]
     )
     ax.text(
@@ -101,12 +142,15 @@ if __name__ == "__main__":
     metrics_json = run_dir / "parity_metrics.json"
     output_png = run_dir / "parity_plot.png"
 
+    transform = load_transform(run_dir)
     _, targets, predictions = load_results(test_results_csv)
+    targets = invert_transform(targets, transform)
+    predictions = invert_transform(predictions, transform)
     metrics = compute_metrics(targets, predictions)
     make_plot(targets, predictions, metrics, output_png)
 
     with metrics_json.open("w") as handle:
-        json.dump(metrics, handle, indent=2)
+        json.dump({**metrics, "target_transform": transform}, handle, indent=2)
 
     print(output_png)
     print(metrics_json)
