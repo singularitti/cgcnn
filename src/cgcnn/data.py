@@ -4,19 +4,20 @@ import json
 import os
 import random
 import warnings
+from collections.abc import Iterable
 
 import numpy as np
 import torch
 from pymatgen.core.structure import Structure
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.dataloader import default_collate
 from torch.utils.data.sampler import SubsetRandomSampler
 
 __all__ = [
-    "GaussianDistance",
-    "AtomInitializer",
     "AtomCustomJSONInitializer",
+    "AtomInitializer",
     "CIFData",
+    "GaussianDistance",
     "collate_pool",
     "get_train_val_test_loader",
 ]
@@ -32,6 +33,9 @@ def get_train_val_test_loader(
     return_test=False,
     num_workers=1,
     pin_memory=False,
+    train_indices=None,
+    val_indices=None,
+    test_indices=None,
     **kwargs,
 ):
     """
@@ -64,34 +68,51 @@ def get_train_val_test_loader(
       DataLoader that random samples the test data, returns if
         return_test=True.
     """
-    total_size = len(dataset)
-    if kwargs["train_size"] is None:
-        if train_ratio is None:
-            assert val_ratio + test_ratio < 1
-            train_ratio = 1 - val_ratio - test_ratio
-            print(
-                f"[Warning] train_ratio is None, using 1 - val_ratio - "
-                f"test_ratio = {train_ratio} as training data."
+    explicit_indices = any(
+        indices is not None for indices in [train_indices, val_indices, test_indices]
+    )
+    if explicit_indices:
+        if train_indices is None or val_indices is None:
+            raise ValueError(
+                "train_indices and val_indices must be provided when using explicit splits."
             )
+        if return_test and test_indices is None:
+            raise ValueError("test_indices must be provided when return_test=True.")
+        train_sampler = SubsetRandomSampler(train_indices)
+        val_sampler = SubsetRandomSampler(val_indices)
+        if return_test:
+            test_sampler = SubsetRandomSampler(test_indices)
+    else:
+        total_size = len(dataset)
+        if kwargs["train_size"] is None:
+            if train_ratio is None:
+                assert val_ratio + test_ratio < 1
+                train_ratio = 1 - val_ratio - test_ratio
+                print(
+                    f"[Warning] train_ratio is None, using 1 - val_ratio - "
+                    f"test_ratio = {train_ratio} as training data."
+                )
+            else:
+                assert train_ratio + val_ratio + test_ratio <= 1
+        indices = list(range(total_size))
+        if kwargs["train_size"]:
+            train_size = kwargs["train_size"]
         else:
-            assert train_ratio + val_ratio + test_ratio <= 1
-    indices = list(range(total_size))
-    if kwargs["train_size"]:
-        train_size = kwargs["train_size"]
-    else:
-        train_size = int(train_ratio * total_size)
-    if kwargs["test_size"]:
-        test_size = kwargs["test_size"]
-    else:
-        test_size = int(test_ratio * total_size)
-    if kwargs["val_size"]:
-        valid_size = kwargs["val_size"]
-    else:
-        valid_size = int(val_ratio * total_size)
-    train_sampler = SubsetRandomSampler(indices[:train_size])
-    val_sampler = SubsetRandomSampler(indices[-(valid_size + test_size) : -test_size])
-    if return_test:
-        test_sampler = SubsetRandomSampler(indices[-test_size:])
+            train_size = int(train_ratio * total_size)
+        if kwargs["test_size"]:
+            test_size = kwargs["test_size"]
+        else:
+            test_size = int(test_ratio * total_size)
+        if kwargs["val_size"]:
+            valid_size = kwargs["val_size"]
+        else:
+            valid_size = int(val_ratio * total_size)
+        train_sampler = SubsetRandomSampler(indices[:train_size])
+        val_sampler = SubsetRandomSampler(
+            indices[-(valid_size + test_size) : -test_size]
+        )
+        if return_test:
+            test_sampler = SubsetRandomSampler(indices[-test_size:])
     train_loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -184,7 +205,7 @@ def collate_pool(dataset_list):
     )
 
 
-class GaussianDistance(object):
+class GaussianDistance:
     """
     Expands the distance by Gaussian basis.
 
@@ -229,7 +250,7 @@ class GaussianDistance(object):
         return np.exp(-((distances[..., np.newaxis] - self.filter) ** 2) / self.var**2)
 
 
-class AtomInitializer(object):
+class AtomInitializer:
     """
     Base class for intializing the vector representation for atoms.
 
@@ -280,7 +301,7 @@ class AtomCustomJSONInitializer(AtomInitializer):
             elem_embedding = json.load(f)
         elem_embedding = {int(key): value for key, value in elem_embedding.items()}
         atom_types = set(elem_embedding.keys())
-        super(AtomCustomJSONInitializer, self).__init__(atom_types)
+        super().__init__(atom_types)
         for key, value in elem_embedding.items():
             self._embedding[key] = np.array(value, dtype=float)
 
@@ -336,7 +357,15 @@ class CIFData(Dataset):
     """
 
     def __init__(
-        self, root_dir, max_num_nbr=12, radius=8, dmin=0, step=0.2, random_seed=123
+        self,
+        root_dir,
+        max_num_nbr=12,
+        radius=8,
+        dmin=0,
+        step=0.2,
+        random_seed=123,
+        shuffle=True,
+        include_ids: Iterable[str] | None = None,
     ):
         self.root_dir = root_dir
         self.max_num_nbr, self.radius = max_num_nbr, radius
@@ -346,6 +375,11 @@ class CIFData(Dataset):
         with open(id_prop_file) as f:
             reader = csv.reader(f)
             self.id_prop_data = [row for row in reader if row]
+        if include_ids is not None:
+            include_ids = set(include_ids)
+            self.id_prop_data = [
+                row for row in self.id_prop_data if row and row[0] in include_ids
+            ]
         if not self.id_prop_data:
             raise ValueError("id_prop.csv is empty!")
         self.n_targets = len(self.id_prop_data[0]) - 1
@@ -359,8 +393,9 @@ class CIFData(Dataset):
                         self.n_targets, len(row) - 1, row[0] if row else "unknown"
                     )
                 )
-        random.seed(random_seed)
-        random.shuffle(self.id_prop_data)
+        if shuffle:
+            random.seed(random_seed)
+            random.shuffle(self.id_prop_data)
         atom_init_file = os.path.join(self.root_dir, "atom_init.json")
         assert os.path.exists(atom_init_file), "atom_init.json does not exist!"
         self.ari = AtomCustomJSONInitializer(atom_init_file)
@@ -369,7 +404,7 @@ class CIFData(Dataset):
     def __len__(self):
         return len(self.id_prop_data)
 
-    @functools.lru_cache(maxsize=None)  # Cache loaded structures
+    @functools.cache  # Cache loaded structures
     def __getitem__(self, idx):
         row = self.id_prop_data[idx]
         cif_id, target_values = row[0], row[1:]
@@ -384,9 +419,9 @@ class CIFData(Dataset):
         for nbr in all_nbrs:
             if len(nbr) < self.max_num_nbr:
                 warnings.warn(
-                    "{} not find enough neighbors to build graph. "
+                    f"{cif_id} not find enough neighbors to build graph. "
                     "If it happens frequently, consider increase "
-                    "radius.".format(cif_id)
+                    "radius."
                 )
                 nbr_fea_idx.append(
                     list(map(lambda x: x[2], nbr)) + [0] * (self.max_num_nbr - len(nbr))

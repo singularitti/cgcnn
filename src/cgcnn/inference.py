@@ -5,7 +5,7 @@ Inference utilities for CGCNN; refactors predict.py into importable functions.
 import os
 
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.utils.data import DataLoader
 
 from .data import CIFData, collate_pool
@@ -30,6 +30,8 @@ def predict_model(
     workers: int = 0,
     cuda: bool | None = None,
     print_freq: int = 10,
+    shuffle: bool = False,
+    output_csv: str = "test_results.csv",
 ):
     """Load a model from a saved checkpoint or use provided model and predict on CIF files in `dataset`.
 
@@ -61,7 +63,7 @@ def predict_model(
     test_loader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=workers,
         collate_fn=collate_fn,
         pin_memory=cuda,
@@ -114,5 +116,6 @@ def predict_model(
         task,
         test=True,
         print_freq=print_freq,
+        output_csv=output_csv,
     )
     return out_csv

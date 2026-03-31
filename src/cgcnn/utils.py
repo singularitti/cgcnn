@@ -4,23 +4,24 @@ This file contains Normalizer, mae, class_eval, AverageMeter, save_checkpoint, a
 """
 
 import shutil
+import time
+
 import numpy as np
 import torch
 from sklearn import metrics
-import time
 from torch.autograd import Variable
 
 __all__ = [
-    "Normalizer",
-    "mae",
-    "class_eval",
     "AverageMeter",
-    "save_checkpoint",
+    "Normalizer",
     "_validate",
+    "class_eval",
+    "mae",
+    "save_checkpoint",
 ]
 
 
-class Normalizer(object):
+class Normalizer:
     """Normalize a Tensor and restore it later."""
 
     def __init__(self, tensor: torch.Tensor):
@@ -69,7 +70,7 @@ def class_eval(prediction: torch.Tensor, target: torch.Tensor):
     prediction = np.exp(prediction.numpy())
     target = target.numpy()
     pred_label = np.argmax(prediction, axis=1)
-    target_label = np.squeeze(target)
+    target_label = np.atleast_1d(np.squeeze(target))
     if prediction.shape[1] == 2:
         precision, recall, fscore, _ = metrics.precision_recall_fscore_support(
             target_label, pred_label, average="binary"
@@ -81,7 +82,7 @@ def class_eval(prediction: torch.Tensor, target: torch.Tensor):
     return accuracy, precision, recall, fscore, auc_score
 
 
-class AverageMeter(object):
+class AverageMeter:
     """Computes and stores the average and current value"""
 
     def __init__(self):
@@ -199,44 +200,34 @@ def _print_progress(
     if i % print_freq == 0:
         if task == "regression":
             print(
-                "{prefix}: [{0}/{1}]\t"
-                "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
-                "MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})".format(
-                    i,
-                    len_loader,
-                    batch_time=batch_time,
-                    loss=losses,
-                    mae_errors=mae_errors,
-                    prefix=prefix,
-                )
+                f"{prefix}: [{i}/{len_loader}]\t"
+                f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+                f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
+                f"MAE {mae_errors.val:.3f} ({mae_errors.avg:.3f})"
             )
         else:
             print(
-                "{prefix}: [{0}/{1}]\t"
-                "Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
-                "Loss {loss.val:.4f} ({loss.avg:.4f})\t"
-                "Accu {accu.val:.3f} ({accu.avg:.3f})\t"
-                "Precision {prec.val:.3f} ({prec.avg:.3f})\t"
-                "Recall {recall.val:.3f} ({recall.avg:.3f})\t"
-                "F1 {f1.val:.3f} ({f1.avg:.3f})\t"
-                "AUC {auc.val:.3f} ({auc.avg:.3f})".format(
-                    i,
-                    len_loader,
-                    batch_time=batch_time,
-                    loss=losses,
-                    accu=accuracies,
-                    prec=precisions,
-                    recall=recalls,
-                    f1=fscores,
-                    auc=auc_scores,
-                    prefix=prefix,
-                )
+                f"{prefix}: [{i}/{len_loader}]\t"
+                f"Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t"
+                f"Loss {losses.val:.4f} ({losses.avg:.4f})\t"
+                f"Accu {accuracies.val:.3f} ({accuracies.avg:.3f})\t"
+                f"Precision {precisions.val:.3f} ({precisions.avg:.3f})\t"
+                f"Recall {recalls.val:.3f} ({recalls.avg:.3f})\t"
+                f"F1 {fscores.val:.3f} ({fscores.avg:.3f})\t"
+                f"AUC {auc_scores.val:.3f} ({auc_scores.avg:.3f})"
             )
 
 
 def _validate(
-    val_loader, model, criterion, normalizer, cuda, task, test=False, print_freq=10
+    val_loader,
+    model,
+    criterion,
+    normalizer,
+    cuda,
+    task,
+    test=False,
+    print_freq=10,
+    output_csv="test_results.csv",
 ):
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -295,20 +286,23 @@ def _validate(
         )
 
     if test:
-        out_csv = "test_results.csv"
         import csv
 
-        with open(out_csv, "w") as f:
+        with open(output_csv, "w") as f:
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets, test_preds):
+                if not isinstance(target, (list, tuple)):
+                    target = [target]
+                if not isinstance(pred, (list, tuple)):
+                    pred = [pred]
                 writer.writerow(
                     [cif_id] + list(map(float, target)) + list(map(float, pred))
                 )
-        return out_csv
+        return output_csv
     else:
         if task == "regression":
-            print(" MAE {mae_errors.avg:.3f}".format(mae_errors=mae_errors))
+            print(f" MAE {mae_errors.avg:.3f}")
             return mae_errors.avg
         else:
-            print(" AUC {auc.avg:.3f}".format(auc=auc_scores))
+            print(f" AUC {auc_scores.avg:.3f}")
             return auc_scores.avg

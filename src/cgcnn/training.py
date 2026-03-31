@@ -11,21 +11,20 @@ import warnings
 from random import sample
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
+from torch import nn, optim
 from torch.optim.lr_scheduler import MultiStepLR
 
 from .data import CIFData, collate_pool, get_train_val_test_loader
 from .model import CrystalGraphConvNet
 from .utils import (
-    Normalizer,
     AverageMeter,
-    save_checkpoint,
-    _validate,
-    _prepare_inputs_targets,
+    Normalizer,
     _forward_and_loss,
-    _update_metrics,
+    _prepare_inputs_targets,
     _print_progress,
+    _update_metrics,
+    _validate,
+    save_checkpoint,
 )
 
 __all__ = ["train_model"]
@@ -34,7 +33,7 @@ __all__ = ["train_model"]
 def _to_device(obj, cuda: bool):
     if cuda:
         if isinstance(obj, tuple):
-            return tuple((_to_device(x, cuda) for x in obj))
+            return tuple(_to_device(x, cuda) for x in obj)
         try:
             return obj.cuda(non_blocking=True)
         except Exception:
@@ -69,6 +68,9 @@ def train_model(
     resume: str | None = None,
     checkpoint_dir: str | None = None,
     metrics_history_path: str | None = None,
+    train_ids: list[str] | None = None,
+    val_ids: list[str] | None = None,
+    test_ids: list[str] | None = None,
 ):
     """Train a CGCNN model.
 
@@ -88,7 +90,23 @@ def train_model(
         cuda = torch.cuda.is_available()
     if lr_milestones is None:
         lr_milestones = [100]
-    dataset = CIFData(root_dir)
+    explicit_split_ids = any(ids is not None for ids in [train_ids, val_ids, test_ids])
+    dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
+    train_indices = val_indices = test_indices = None
+    if explicit_split_ids:
+        if train_ids is None or val_ids is None or test_ids is None:
+            raise ValueError(
+                "train_ids, val_ids, and test_ids must all be provided when using explicit splits."
+            )
+        id_to_index = {
+            row[0]: idx for idx, row in enumerate(dataset.id_prop_data) if row
+        }
+        try:
+            train_indices = [id_to_index[cif_id] for cif_id in train_ids]
+            val_indices = [id_to_index[cif_id] for cif_id in val_ids]
+            test_indices = [id_to_index[cif_id] for cif_id in test_ids]
+        except KeyError as exc:
+            raise ValueError(f"Unknown CIF id in explicit split: {exc.args[0]}") from exc
     collate_fn = collate_pool
     returned_loaders = get_train_val_test_loader(
         dataset=dataset,
@@ -103,6 +121,9 @@ def train_model(
         val_size=val_size,
         test_size=test_size,
         return_test=True,
+        train_indices=train_indices,
+        val_indices=val_indices,
+        test_indices=test_indices,
     )
     if isinstance(returned_loaders, tuple) and len(returned_loaders) == 3:
         train_loader, val_loader, test_loader = returned_loaders
@@ -213,7 +234,10 @@ def train_model(
         else:
             val_metric = float(val_metric)
         if val_metric != val_metric:
-            raise RuntimeError("Training diverged: validation MAE is NaN")
+            if task == "classification":
+                val_metric = 0.0
+            else:
+                raise RuntimeError("Training diverged: validation MAE is NaN")
         scheduler.step()
         if task == "regression":
             is_best = val_metric < best_mae_error
@@ -227,7 +251,14 @@ def train_model(
             "best_mae_error": best_mae_error,
             "optimizer": optimizer.state_dict(),
             "normalizer": normalizer.state_dict(),
-            "args": {},
+            "args": {
+                "task": task,
+                "atom_fea_len": atom_fea_len,
+                "n_conv": n_conv,
+                "h_fea_len": h_fea_len,
+                "n_h": n_h,
+                "n_targets": n_targets,
+            },
         }
         save_checkpoint(checkpoint_state, is_best)
         if checkpoint_dir is not None:
@@ -255,6 +286,12 @@ def train_model(
                 json.dump(history, f, indent=2)
         if is_best:
             best_checkpoint_path = os.path.abspath("model_best.pth.tar")
+
+    if (
+        (not best_checkpoint_path or not os.path.exists(best_checkpoint_path))
+        and os.path.exists("checkpoint.pth.tar")
+    ):
+        best_checkpoint_path = os.path.abspath("checkpoint.pth.tar")
 
     # test best model if requested
     if best_checkpoint_path and os.path.exists(best_checkpoint_path):
@@ -337,5 +374,5 @@ def _train_epoch(
             auc_scores,
             task,
             print_freq,
-            prefix="Epoch: [{0}]".format(epoch),
+            prefix=f"Epoch: [{epoch}]",
         )
