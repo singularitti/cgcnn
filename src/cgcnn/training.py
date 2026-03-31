@@ -3,7 +3,9 @@ Training utilities and high-level train function for CGCNN.
 This refactors the previous `main.py` logic into importable functions.
 """
 
+import json
 import os
+import shutil
 import time
 import warnings
 from random import sample
@@ -65,6 +67,8 @@ def train_model(
     val_size: int | None = None,
     test_size: int | None = None,
     resume: str | None = None,
+    checkpoint_dir: str | None = None,
+    metrics_history_path: str | None = None,
 ):
     """Train a CGCNN model.
 
@@ -160,15 +164,29 @@ def train_model(
             checkpoint = torch.load(resume, map_location=(lambda s, l: s))
             start_epoch = checkpoint.get("epoch", start_epoch)
             best_mae_error = checkpoint.get("best_mae_error", best_mae_error)
+            if isinstance(best_mae_error, torch.Tensor):
+                best_mae_error = float(best_mae_error.item())
             model.load_state_dict(checkpoint["state_dict"])  # raises if mismatch
             optimizer.load_state_dict(checkpoint["optimizer"])
             normalizer.load_state_dict(checkpoint["normalizer"])
 
     scheduler = MultiStepLR(optimizer, milestones=lr_milestones, gamma=0.1)
+    if checkpoint_dir is not None:
+        os.makedirs(checkpoint_dir, exist_ok=True)
+    history = []
+    if metrics_history_path and os.path.isfile(metrics_history_path):
+        try:
+            with open(metrics_history_path) as f:
+                loaded_history = json.load(f)
+            if isinstance(loaded_history, list):
+                history = loaded_history
+        except json.JSONDecodeError:
+            history = []
 
     # training loop
-    best_checkpoint_path = None
+    best_checkpoint_path = os.path.abspath("model_best.pth.tar")
     for epoch in range(start_epoch, epochs):
+        epoch_start = time.time()
         _train_epoch(
             train_loader,
             model,
@@ -180,7 +198,7 @@ def train_model(
             task,
             print_freq,
         )
-        mae_error = _validate(
+        val_metric = _validate(
             val_loader,
             model,
             criterion,
@@ -190,26 +208,51 @@ def train_model(
             test=False,
             print_freq=10,
         )
-        if mae_error != mae_error:
+        if isinstance(val_metric, torch.Tensor):
+            val_metric = float(val_metric.item())
+        else:
+            val_metric = float(val_metric)
+        if val_metric != val_metric:
             raise RuntimeError("Training diverged: validation MAE is NaN")
         scheduler.step()
         if task == "regression":
-            is_best = mae_error < best_mae_error
-            best_mae_error = min(mae_error, best_mae_error)
+            is_best = val_metric < best_mae_error
+            best_mae_error = min(val_metric, best_mae_error)
         else:
-            is_best = mae_error > best_mae_error
-            best_mae_error = max(mae_error, best_mae_error)
-        save_checkpoint(
+            is_best = val_metric > best_mae_error
+            best_mae_error = max(val_metric, best_mae_error)
+        checkpoint_state = {
+            "epoch": epoch + 1,
+            "state_dict": model.state_dict(),
+            "best_mae_error": best_mae_error,
+            "optimizer": optimizer.state_dict(),
+            "normalizer": normalizer.state_dict(),
+            "args": {},
+        }
+        save_checkpoint(checkpoint_state, is_best)
+        if checkpoint_dir is not None:
+            epoch_checkpoint_path = os.path.join(
+                checkpoint_dir, f"epoch_{epoch + 1:03d}.pth.tar"
+            )
+            shutil.copyfile("checkpoint.pth.tar", epoch_checkpoint_path)
+        history.append(
             {
                 "epoch": epoch + 1,
-                "state_dict": model.state_dict(),
-                "best_mae_error": best_mae_error,
-                "optimizer": optimizer.state_dict(),
-                "normalizer": normalizer.state_dict(),
-                "args": {},
-            },
-            is_best,
+                "val_metric": float(val_metric),
+                "best_val_metric": float(best_mae_error),
+                "is_best": is_best,
+                "learning_rate": float(optimizer.param_groups[0]["lr"]),
+                "epoch_time_sec": time.time() - epoch_start,
+                "checkpoint": (
+                    os.path.abspath(epoch_checkpoint_path)
+                    if checkpoint_dir is not None
+                    else os.path.abspath("checkpoint.pth.tar")
+                ),
+            }
         )
+        if metrics_history_path:
+            with open(metrics_history_path, "w") as f:
+                json.dump(history, f, indent=2)
         if is_best:
             best_checkpoint_path = os.path.abspath("model_best.pth.tar")
 
