@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+# ruff: noqa: I001
+
 import csv
 import json
 import math
 import os
 import sys
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -14,8 +16,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
-
-from cgcnn.training import train_model
 
 
 DEFAULT_SOURCE_ROOT = Path("/Users/qz/Downloads/cifs")
@@ -40,11 +40,19 @@ def apply_transform(value: float, transform: str) -> float:
         return math.sqrt(value)
     if transform == "cbrt":
         return value ** (1.0 / 3.0)
+    if transform == "log":
+        if value <= 0.0:
+            raise ValueError("log transform requires strictly positive targets")
+        return math.log(value)
+    if transform == "log10":
+        if value <= 0.0:
+            raise ValueError("log10 transform requires strictly positive targets")
+        return math.log10(value)
     raise ValueError(f"Unsupported transform: {transform}")
 
 
 def build_run_dir(runs_root: Path, transform: str) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_dir = runs_root / f"cgcnn_magnetization_{transform}_{timestamp}"
     run_dir.mkdir(parents=True, exist_ok=False)
     return run_dir
@@ -228,6 +236,8 @@ def prepare_dataset(
 
 
 def train(run_dir: Path, epochs: int, batch_size: int, workers: int) -> Path | None:
+    from cgcnn.training import train_model
+
     print("Starting CGCNN training", flush=True)
     os.chdir(run_dir)
     resume_path = run_dir / "checkpoint.pth.tar"

@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -18,6 +19,10 @@ def invert_transform(values: np.ndarray, transform: str) -> np.ndarray:
         return np.square(values)
     if transform == "cbrt":
         return np.power(values, 3)
+    if transform == "log":
+        return np.exp(values)
+    if transform == "log10":
+        return np.power(10.0, values)
     raise ValueError(f"Unsupported transform: {transform}")
 
 
@@ -50,7 +55,9 @@ def load_results(test_results_csv: Path) -> tuple[list[str], np.ndarray, np.ndar
     return material_ids, np.array(targets), np.array(predictions)
 
 
-def compute_metrics(targets: np.ndarray, predictions: np.ndarray) -> dict[str, float]:
+def compute_metrics(
+    targets: np.ndarray, predictions: np.ndarray
+) -> dict[str, int | float | None]:
     if targets.size == 0 or predictions.size == 0:
         raise ValueError("Cannot compute metrics on empty arrays.")
     residuals = predictions - targets
@@ -90,7 +97,10 @@ def compute_metrics(targets: np.ndarray, predictions: np.ndarray) -> dict[str, f
 
 
 def make_plot(
-    targets: np.ndarray, predictions: np.ndarray, metrics: dict[str, float], output_png: Path
+    targets: np.ndarray,
+    predictions: np.ndarray,
+    metrics: Mapping[str, int | float | None],
+    output_png: Path,
 ) -> None:
     def format_metric(value) -> str:
         if value is None:
@@ -136,11 +146,65 @@ def make_plot(
     plt.close(fig)
 
 
+def make_loglog_plot(
+    targets: np.ndarray,
+    predictions: np.ndarray,
+    metrics: Mapping[str, int | float | None],
+    output_png: Path,
+) -> bool:
+    if np.any(targets <= 0) or np.any(predictions <= 0):
+        return False
+
+    def format_metric(value) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:.4f}"
+
+    combined_min = float(min(np.min(targets), np.min(predictions)))
+    combined_max = float(max(np.max(targets), np.max(predictions)))
+
+    fig, ax = plt.subplots(figsize=(6.5, 6.5), dpi=180)
+    ax.scatter(targets, predictions, s=8, alpha=0.35, linewidths=0, color="#1f6feb")
+    ax.plot([combined_min, combined_max], [combined_min, combined_max], color="#d62728", linewidth=1.2)
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlim(combined_min, combined_max)
+    ax.set_ylim(combined_min, combined_max)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("Target")
+    ax.set_ylabel("Prediction")
+    ax.set_title("CGCNN Parity Plot (log-log)")
+
+    text = "\n".join(
+        [
+            f"N = {metrics['count']}",
+            f"R = {format_metric(metrics['pearson_r'])}",
+            f"R^2 = {format_metric(metrics['r2_score'])}",
+            f"MAE = {format_metric(metrics['mae'])}",
+            f"RMSE = {format_metric(metrics['rmse'])}",
+        ]
+    )
+    ax.text(
+        0.04,
+        0.96,
+        text,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        bbox={"facecolor": "white", "alpha": 0.85, "edgecolor": "#cccccc"},
+    )
+    fig.tight_layout()
+    fig.savefig(output_png, bbox_inches="tight")
+    plt.close(fig)
+    return True
+
+
 if __name__ == "__main__":
     run_dir = Path(sys.argv[1])
     test_results_csv = run_dir / "test_results.csv"
     metrics_json = run_dir / "parity_metrics.json"
     output_png = run_dir / "parity_plot.png"
+    output_loglog_png = run_dir / "parity_plot_loglog.png"
 
     transform = load_transform(run_dir)
     _, targets, predictions = load_results(test_results_csv)
@@ -148,9 +212,12 @@ if __name__ == "__main__":
     predictions = invert_transform(predictions, transform)
     metrics = compute_metrics(targets, predictions)
     make_plot(targets, predictions, metrics, output_png)
+    make_loglog_plot(targets, predictions, metrics, output_loglog_png)
 
     with metrics_json.open("w") as handle:
         json.dump({**metrics, "target_transform": transform}, handle, indent=2)
 
     print(output_png)
+    if output_loglog_png.exists():
+        print(output_loglog_png)
     print(metrics_json)
