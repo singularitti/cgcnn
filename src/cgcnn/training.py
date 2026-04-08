@@ -71,6 +71,10 @@ def train_model(
     train_ids: list[str] | None = None,
     val_ids: list[str] | None = None,
     test_ids: list[str] | None = None,
+    n_classes: int | None = None,
+    class_weights: list[float] | None = None,
+    classification_metric: str | None = None,
+    classification_metric_class_index: int | None = None,
 ):
     """Train a CGCNN model.
 
@@ -90,6 +94,11 @@ def train_model(
         cuda = torch.cuda.is_available()
     if lr_milestones is None:
         lr_milestones = [100]
+    if task == "classification":
+        n_classes = n_classes or 2
+        classification_metric = classification_metric or (
+            "auc" if n_classes == 2 else "macro_f1"
+        )
     explicit_split_ids = any(ids is not None for ids in [train_ids, val_ids, test_ids])
     dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
     train_indices = val_indices = test_indices = None
@@ -160,13 +169,23 @@ def train_model(
         n_h=n_h,
         classification=True if task == "classification" else False,
         n_targets=n_targets,
+        n_classes=n_classes or 2,
     )
     if cuda:
         model.cuda()
 
     # define loss func and optimizer
     if task == "classification":
-        criterion = nn.NLLLoss()
+        criterion_weight = None
+        if class_weights is not None:
+            if len(class_weights) != n_classes:
+                raise ValueError(
+                    f"Expected {n_classes} class weights, received {len(class_weights)}."
+                )
+            criterion_weight = torch.tensor(class_weights, dtype=torch.float)
+            if cuda:
+                criterion_weight = criterion_weight.cuda()
+        criterion = nn.NLLLoss(weight=criterion_weight)
     else:
         criterion = nn.MSELoss()
     if optim_name == "SGD":
@@ -179,14 +198,17 @@ def train_model(
         raise NameError("Only SGD or Adam is allowed as optim_name")
 
     # optionally resume from a checkpoint
-    best_mae_error = 1e10 if task == "regression" else 0.0
+    best_validation_score = 1e10 if task == "regression" else float("-inf")
     if resume:
         if os.path.isfile(resume):
             checkpoint = torch.load(resume, map_location=(lambda s, l: s))
             start_epoch = checkpoint.get("epoch", start_epoch)
-            best_mae_error = checkpoint.get("best_mae_error", best_mae_error)
-            if isinstance(best_mae_error, torch.Tensor):
-                best_mae_error = float(best_mae_error.item())
+            best_validation_score = checkpoint.get(
+                "best_validation_score",
+                checkpoint.get("best_mae_error", best_validation_score),
+            )
+            if isinstance(best_validation_score, torch.Tensor):
+                best_validation_score = float(best_validation_score.item())
             model.load_state_dict(checkpoint["state_dict"])  # raises if mismatch
             optimizer.load_state_dict(checkpoint["optimizer"])
             normalizer.load_state_dict(checkpoint["normalizer"])
@@ -228,6 +250,8 @@ def train_model(
             task,
             test=False,
             print_freq=10,
+            classification_metric=classification_metric or "auc",
+            classification_metric_class_index=classification_metric_class_index,
         )
         if isinstance(val_metric, torch.Tensor):
             val_metric = float(val_metric.item())
@@ -240,15 +264,16 @@ def train_model(
                 raise RuntimeError("Training diverged: validation MAE is NaN")
         scheduler.step()
         if task == "regression":
-            is_best = val_metric < best_mae_error
-            best_mae_error = min(val_metric, best_mae_error)
+            is_best = val_metric < best_validation_score
+            best_validation_score = min(val_metric, best_validation_score)
         else:
-            is_best = val_metric > best_mae_error
-            best_mae_error = max(val_metric, best_mae_error)
+            is_best = val_metric > best_validation_score
+            best_validation_score = max(val_metric, best_validation_score)
         checkpoint_state = {
             "epoch": epoch + 1,
             "state_dict": model.state_dict(),
-            "best_mae_error": best_mae_error,
+            "best_validation_score": best_validation_score,
+            "best_mae_error": best_validation_score,
             "optimizer": optimizer.state_dict(),
             "normalizer": normalizer.state_dict(),
             "args": {
@@ -258,6 +283,7 @@ def train_model(
                 "h_fea_len": h_fea_len,
                 "n_h": n_h,
                 "n_targets": n_targets,
+                "n_classes": n_classes if task == "classification" else None,
             },
         }
         save_checkpoint(checkpoint_state, is_best)
@@ -270,7 +296,7 @@ def train_model(
             {
                 "epoch": epoch + 1,
                 "val_metric": float(val_metric),
-                "best_val_metric": float(best_mae_error),
+                "best_val_metric": float(best_validation_score),
                 "is_best": is_best,
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "epoch_time_sec": time.time() - epoch_start,
@@ -306,6 +332,8 @@ def train_model(
             task,
             test=True,
             print_freq=10,
+            classification_metric=classification_metric or "auc",
+            classification_metric_class_index=classification_metric_class_index,
         )
 
     return best_checkpoint_path

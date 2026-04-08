@@ -15,6 +15,7 @@ __all__ = [
     "AverageMeter",
     "Normalizer",
     "_validate",
+    "classification_metric_value",
     "class_eval",
     "mae",
     "save_checkpoint",
@@ -64,22 +65,92 @@ def mae(prediction: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
 
 
 def class_eval(prediction: torch.Tensor, target: torch.Tensor):
-    """Evaluate classification predictions and return accuracy, precision,
-    recall, fscore, and auc.
-    """
-    prediction = np.exp(prediction.numpy())
-    target = target.numpy()
-    pred_label = np.argmax(prediction, axis=1)
-    target_label = np.atleast_1d(np.squeeze(target))
-    if prediction.shape[1] == 2:
-        precision, recall, fscore, _ = metrics.precision_recall_fscore_support(
-            target_label, pred_label, average="binary"
+    """Evaluate classification predictions for binary and multiclass settings."""
+    probabilities = np.exp(prediction.numpy())
+    target_array = np.atleast_1d(np.squeeze(target.numpy())).astype(int)
+    pred_label = np.argmax(probabilities, axis=1)
+    n_classes = probabilities.shape[1]
+    labels = list(range(n_classes))
+
+    accuracy = metrics.accuracy_score(target_array, pred_label)
+    macro_precision, macro_recall, macro_fscore, _ = (
+        metrics.precision_recall_fscore_support(
+            target_array,
+            pred_label,
+            labels=labels,
+            average="macro",
+            zero_division=0,
         )
-        auc_score = metrics.roc_auc_score(target_label, prediction[:, 1])
-        accuracy = metrics.accuracy_score(target_label, pred_label)
+    )
+    per_class_precision, per_class_recall, per_class_fscore, supports = (
+        metrics.precision_recall_fscore_support(
+            target_array,
+            pred_label,
+            labels=labels,
+            average=None,
+            zero_division=0,
+        )
+    )
+
+    summary = {
+        "accuracy": float(accuracy),
+        "precision": float(macro_precision),
+        "recall": float(macro_recall),
+        "fscore": float(macro_fscore),
+        "macro_precision": float(macro_precision),
+        "macro_recall": float(macro_recall),
+        "macro_f1": float(macro_fscore),
+        "per_class_precision": [float(value) for value in per_class_precision.tolist()],
+        "per_class_recall": [float(value) for value in per_class_recall.tolist()],
+        "per_class_f1": [float(value) for value in per_class_fscore.tolist()],
+        "supports": [int(value) for value in supports.tolist()],
+        "confusion_matrix": metrics.confusion_matrix(
+            target_array, pred_label, labels=labels
+        ).tolist(),
+        "n_classes": int(n_classes),
+    }
+
+    if n_classes == 2:
+        binary_precision, binary_recall, binary_fscore, _ = (
+            metrics.precision_recall_fscore_support(
+                target_array,
+                pred_label,
+                average="binary",
+                zero_division=0,
+            )
+        )
+        summary["precision"] = float(binary_precision)
+        summary["recall"] = float(binary_recall)
+        summary["fscore"] = float(binary_fscore)
+        if len(set(target_array.tolist())) > 1:
+            summary["auc"] = float(metrics.roc_auc_score(target_array, probabilities[:, 1]))
+        else:
+            summary["auc"] = None
     else:
-        raise NotImplementedError("Only binary classification supported by class_eval")
-    return accuracy, precision, recall, fscore, auc_score
+        summary["auc"] = None
+    return summary
+
+
+def classification_metric_value(
+    summary: dict[str, object],
+    metric_name: str,
+    class_index: int | None = None,
+) -> float:
+    if metric_name == "auc":
+        value = summary.get("auc")
+        return float(value) if value is not None else 0.0
+    if metric_name == "accuracy":
+        return float(summary["accuracy"])
+    if metric_name == "macro_f1":
+        return float(summary["macro_f1"])
+    if metric_name == "class_f1":
+        if class_index is None:
+            raise ValueError("class_index is required when using classification metric 'class_f1'.")
+        per_class_f1 = summary.get("per_class_f1")
+        if not isinstance(per_class_f1, list) or class_index >= len(per_class_f1):
+            raise ValueError(f"Invalid class_index {class_index} for class_f1 metric.")
+        return float(per_class_f1[class_index])
+    raise ValueError(f"Unsupported classification metric: {metric_name}")
 
 
 class AverageMeter:
@@ -164,8 +235,15 @@ def _update_metrics(
             test_targets += test_target.tolist()
             test_cif_ids += batch_cif_ids
     else:
-        accuracy, precision, recall, fscore, auc_score = class_eval(
-            output.data.cpu(), target
+        class_metrics = class_eval(output.data.cpu(), target)
+        accuracy = float(class_metrics["accuracy"])
+        precision = float(class_metrics["precision"])
+        recall = float(class_metrics["recall"])
+        fscore = float(class_metrics["fscore"])
+        auc_score = (
+            float(class_metrics["auc"])
+            if class_metrics.get("auc") is not None
+            else 0.0
         )
         losses.update(loss.data.cpu().item(), target.size(0))
         accuracies.update(accuracy, target.size(0))
@@ -174,11 +252,17 @@ def _update_metrics(
         fscores.update(fscore, target.size(0))
         auc_scores.update(auc_score, target.size(0))
         if test:
-            test_pred = torch.exp(output.data.cpu())
-            test_target = target
-            assert test_pred.shape[1] == 2
-            test_preds += test_pred[:, 1].tolist()
-            test_targets += test_target.view(-1).tolist()
+            probabilities = torch.exp(output.data.cpu())
+            predicted_labels = torch.argmax(probabilities, dim=1)
+            test_target = target.view(-1)
+            if probabilities.shape[1] == 2:
+                test_preds += probabilities[:, 1].tolist()
+            else:
+                for predicted_label, probability_row in zip(
+                    predicted_labels.tolist(), probabilities.tolist()
+                ):
+                    test_preds.append([float(predicted_label)] + list(map(float, probability_row)))
+            test_targets += test_target.tolist()
             test_cif_ids += batch_cif_ids
 
 
@@ -228,6 +312,8 @@ def _validate(
     test=False,
     print_freq=10,
     output_csv="test_results.csv",
+    classification_metric="auc",
+    classification_metric_class_index=None,
 ):
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -241,6 +327,8 @@ def _validate(
     test_targets = []
     test_preds = []
     test_cif_ids = []
+    classification_outputs = []
+    classification_targets = []
 
     model.eval()
     end = time.time()
@@ -268,6 +356,9 @@ def _validate(
             batch_cif_ids,
             normalizer,
         )
+        if task == "classification":
+            classification_outputs.append(output.data.cpu())
+            classification_targets.append(target.view(-1).cpu())
         batch_time.update(time.time() - end)
         end = time.time()
         _print_progress(
@@ -291,18 +382,33 @@ def _validate(
         with open(output_csv, "w") as f:
             writer = csv.writer(f)
             for cif_id, target, pred in zip(test_cif_ids, test_targets, test_preds):
-                if not isinstance(target, (list, tuple)):
-                    target = [target]
-                if not isinstance(pred, (list, tuple)):
-                    pred = [pred]
-                writer.writerow(
-                    [cif_id] + list(map(float, target)) + list(map(float, pred))
-                )
+                if task == "classification" and isinstance(pred, list) and len(pred) > 1:
+                    writer.writerow([cif_id, int(target), int(pred[0])] + list(map(float, pred[1:])))
+                else:
+                    if not isinstance(target, (list, tuple)):
+                        target = [target]
+                    if not isinstance(pred, (list, tuple)):
+                        pred = [pred]
+                    writer.writerow(
+                        [cif_id] + list(map(float, target)) + list(map(float, pred))
+                    )
         return output_csv
     else:
         if task == "regression":
             print(f" MAE {mae_errors.avg:.3f}")
             return mae_errors.avg
         else:
-            print(f" AUC {auc_scores.avg:.3f}")
-            return auc_scores.avg
+            if classification_outputs:
+                classification_summary = class_eval(
+                    torch.cat(classification_outputs, dim=0),
+                    torch.cat(classification_targets, dim=0),
+                )
+                metric_value = classification_metric_value(
+                    classification_summary,
+                    classification_metric,
+                    classification_metric_class_index,
+                )
+            else:
+                metric_value = 0.0
+            print(f" {classification_metric} {metric_value:.3f}")
+            return metric_value

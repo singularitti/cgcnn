@@ -129,6 +129,7 @@ class CrystalGraphConvNet(nn.Module):
         n_h=1,
         classification=False,
         n_targets=1,
+        n_classes=2,
     ):
         """
         Initialize CrystalGraphConvNet.
@@ -152,10 +153,13 @@ class CrystalGraphConvNet(nn.Module):
           Whether to perform classification instead of regression
         n_targets: int
           Number of regression targets (ignored for classification)
+        n_classes: int
+          Number of classes for classification tasks
         """
         super(CrystalGraphConvNet, self).__init__()
         self.classification = classification
         self.n_targets = n_targets
+        self.n_classes = n_classes if classification else None
         self.embedding = nn.Linear(orig_atom_fea_len, atom_fea_len)
         self.convs = nn.ModuleList([
             ConvLayer(atom_fea_len=atom_fea_len, nbr_fea_len=nbr_fea_len)
@@ -169,7 +173,7 @@ class CrystalGraphConvNet(nn.Module):
             ])
             self.softpluses = nn.ModuleList([nn.Softplus() for _ in range(n_h - 1)])
         if self.classification:
-            self.fc_out = nn.Linear(h_fea_len, 2)
+            self.fc_out = nn.Linear(h_fea_len, self.n_classes)
         else:
             self.fc_out = nn.Linear(h_fea_len, self.n_targets)
         if self.classification:

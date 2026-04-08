@@ -23,6 +23,7 @@ def predict_model(
     h_fea_len: int | None = None,
     n_h: int | None = None,
     n_targets: int | None = None,
+    n_classes: int | None = None,
     model: CrystalGraphConvNet | None = None,
     normalizer: Normalizer | None = None,
     modelpath: str | None = None,
@@ -50,6 +51,7 @@ def predict_model(
         h_fea_len = h_fea_len or args.get("h_fea_len", 128)
         n_h = n_h or args.get("n_h", 1)
         n_targets = n_targets or args.get("n_targets", dataset.n_targets)
+        n_classes = n_classes or args.get("n_classes", 2)
     else:
         checkpoint = None
         task = task or "regression"
@@ -58,6 +60,7 @@ def predict_model(
         h_fea_len = h_fea_len or 128
         n_h = n_h or 1
         n_targets = n_targets or dataset.n_targets
+        n_classes = n_classes or getattr(model, "n_classes", 2)
 
     collate_fn = collate_pool
     test_loader = DataLoader(
@@ -85,6 +88,7 @@ def predict_model(
             n_h=n_h,
             classification=True if task == "classification" else False,
             n_targets=model_target_dim,
+            n_classes=n_classes or 2,
         )
         model.load_state_dict(checkpoint["state_dict"])  # will raise on mismatch
     if cuda:
