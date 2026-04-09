@@ -4,7 +4,10 @@ import pkgutil
 __all__ = []
 
 for _, module_name, _ in pkgutil.walk_packages(__path__):
-    module = importlib.import_module(f"{__name__}.{module_name}")
+    try:
+        module = importlib.import_module(f"{__name__}.{module_name}")
+    except ImportError:
+        continue
     if hasattr(module, "__all__"):
         globals().update({k: getattr(module, k) for k in module.__all__})
         __all__.extend(module.__all__)
