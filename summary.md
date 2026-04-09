@@ -258,6 +258,36 @@ Predictions:
 - almost none at those smallest decades
 - most predicted magnitudes are around `1e-3` to `1e-2`
 
+## Latest update: three-stage threshold pipeline and empty evaluation folder
+
+We added a new approach to isolate tiny positives from larger positives:
+- `tools/train_magnetization_three_stage.py`
+- threshold split at `1e-3`
+- zero/nonzero classifier
+- positive small/large classifier
+- small regressor trained with `log` transform
+- large regressor trained raw
+
+This solved the workflow issue where previous plots were evaluated on the wrong test domains.
+The correct split is now:
+- small regressor only on `0 < M <= 1e-3`
+- large regressor only on `M > 1e-3`
+
+Important note:
+- an earlier run created an empty `evaluation/` folder because the process aborted before finishing
+- the successful current full-data run is:
+  - `~/Downloads/runs/cgcnn_magnetization_three_stage_th1e-03_log_raw_20260407_113727`
+- that run produced complete `evaluation/` outputs, including:
+  - `small_regressor_parity_plot.png`
+  - `small_regressor_parity_plot_loglog.png`
+  - `large_regressor_parity_plot.png`
+  - merged benchmark files
+
+Current understanding:
+- the core problem still appears to be the tiny positive regime, not exact zeros
+- the model still outputs a relatively high floor compared to the many targets below `1e-5`
+- the three-stage pipeline is the latest successful workflow for diagnosing this
+
 So the model is not outputting zeros.
 It is outputting values that are much larger than these ultra-small true targets.
 
@@ -297,12 +327,25 @@ What is fixed:
 - transformed-target training
 - 2-stage classifier+regressor pipeline
 - standalone positive-only training
+- three-stage threshold pipeline with small/log and large/raw branches
+- correct per-domain evaluation for small and large regressors
+- full `evaluation/` outputs for the latest successful run
 - parity plots, histograms, and subset metrics
 - deterministic split support in the repo
 
 What is still unresolved:
 - the model still does not follow the ultra-small positive `M` values closely
 - the vertical-looking tail remains because the left edge of the target distribution is populated by many tiny positive values, not by exact zeros
+- the current objective/loss still underweights the tiny positive regime relative to larger values
+
+Important note:
+- an earlier run aborted and left an empty `evaluation/` folder
+- the latest 113727 run produced outputs, but it was a short debug-style run (1 epoch, limited evaluation samples)
+- it is not necessarily a full-data production success
+- the outputs include:
+  - `small_regressor_parity_plot.png`
+  - `small_regressor_parity_plot_loglog.png`
+  - `large_regressor_parity_plot.png`
 
 So the final understanding is:
 
