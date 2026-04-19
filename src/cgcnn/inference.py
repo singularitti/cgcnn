@@ -3,6 +3,7 @@ Inference utilities for CGCNN; refactors predict.py into importable functions.
 """
 
 import os
+import sys
 
 import torch
 from torch import nn
@@ -10,6 +11,11 @@ from torch.utils.data import DataLoader
 
 from .data import CIFData, collate_pool
 from .model import CrystalGraphConvNet
+from .process_cleanup import (
+    cleanup_orphaned_python_workers,
+    cleanup_stale_torch_shm_managers,
+    ensure_orphaned_worker_reaper,
+)
 from .utils import Normalizer, _validate
 
 __all__ = ["predict_model"]
@@ -40,6 +46,20 @@ def predict_model(
     """
     if cuda is None:
         cuda = torch.cuda.is_available()
+    cleaned_pids = cleanup_orphaned_python_workers(sys.executable)
+    if cleaned_pids:
+        print(f"Cleaned orphaned Python worker processes: {cleaned_pids}")
+    torch_shm_retain_count = max(workers * 2, 0)
+    if torch_shm_retain_count > 0:
+        cleaned_torch_shm = cleanup_stale_torch_shm_managers(
+            retain_count=torch_shm_retain_count,
+        )
+        if cleaned_torch_shm:
+            print(f"Cleaned stale torch_shm_manager processes: {cleaned_torch_shm}")
+    ensure_orphaned_worker_reaper(
+        sys.executable,
+        torch_shm_retain_count=torch_shm_retain_count,
+    )
     if model is None:
         if modelpath is None or not os.path.isfile(modelpath):
             raise ValueError("Either model or valid modelpath must be provided")
