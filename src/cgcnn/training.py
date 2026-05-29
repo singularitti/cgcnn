@@ -72,6 +72,7 @@ def train_model(
     val_size: int | None = None,
     test_size: int | None = None,
     resume: str | None = None,
+    initialize_from: str | None = None,
     checkpoint_dir: str | None = None,
     metrics_history_path: str | None = None,
     train_ids: list[str] | None = None,
@@ -81,6 +82,8 @@ def train_model(
     class_weights: list[float] | None = None,
     classification_metric: str | None = None,
     classification_metric_class_index: int | None = None,
+    early_stopping_patience: int | None = None,
+    early_stopping_min_delta: float = 0.0,
 ):
     """Train a CGCNN model.
 
@@ -217,6 +220,15 @@ def train_model(
     else:
         raise NameError("Only SGD or Adam is allowed as optim_name")
 
+    # optionally initialize model weights without restoring optimizer/normalizer
+    if initialize_from and not resume:
+        if os.path.isfile(initialize_from):
+            checkpoint = torch.load(initialize_from, map_location=(lambda s, l: s))
+            state_dict = checkpoint.get("state_dict", checkpoint)
+            model.load_state_dict(state_dict)
+        else:
+            raise FileNotFoundError(initialize_from)
+
     # optionally resume from a checkpoint
     best_validation_score = 1e10 if task == "regression" else float("-inf")
     if resume:
@@ -248,6 +260,7 @@ def train_model(
 
     # training loop
     best_checkpoint_path = os.path.abspath("model_best.pth.tar")
+    stale_epochs = 0
     for epoch in range(start_epoch, epochs):
         epoch_start = time.time()
         _train_epoch(
@@ -283,12 +296,19 @@ def train_model(
             else:
                 raise RuntimeError("Training diverged: validation MAE is NaN")
         scheduler.step()
+        previous_best = best_validation_score
         if task == "regression":
             is_best = val_metric < best_validation_score
             best_validation_score = min(val_metric, best_validation_score)
+            significant_improvement = val_metric < previous_best - early_stopping_min_delta
         else:
             is_best = val_metric > best_validation_score
             best_validation_score = max(val_metric, best_validation_score)
+            significant_improvement = val_metric > previous_best + early_stopping_min_delta
+        if significant_improvement:
+            stale_epochs = 0
+        else:
+            stale_epochs += 1
         checkpoint_state = {
             "epoch": epoch + 1,
             "state_dict": model.state_dict(),
@@ -320,6 +340,7 @@ def train_model(
                 "is_best": is_best,
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
                 "epoch_time_sec": time.time() - epoch_start,
+                "stale_epochs": stale_epochs,
                 "checkpoint": (
                     os.path.abspath(epoch_checkpoint_path)
                     if checkpoint_dir is not None
@@ -332,6 +353,13 @@ def train_model(
                 json.dump(history, f, indent=2)
         if is_best:
             best_checkpoint_path = os.path.abspath("model_best.pth.tar")
+        if early_stopping_patience is not None and stale_epochs >= early_stopping_patience:
+            print(
+                "Early stopping triggered after "
+                f"{stale_epochs} stale epochs. Best validation metric: "
+                f"{best_validation_score:.6f}"
+            )
+            break
 
     if (
         (not best_checkpoint_path or not os.path.exists(best_checkpoint_path))
