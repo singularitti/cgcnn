@@ -17,6 +17,7 @@ import numpy as np
 from analyze_parity import compute_metrics, invert_transform, make_loglog_plot, make_plot
 from cgcnn.benchmark import format_metrics_report, run_benchmark
 from cgcnn.data import CIFData
+from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 from cgcnn.training import train_model
 
@@ -204,7 +205,7 @@ def run_training(
             epochs=epochs,
             batch_size=batch_size,
             workers=workers,
-            cuda=False,
+            device=get_env_device(),
             train_ids=train_ids,
             val_ids=val_ids,
             test_ids=test_ids,
@@ -236,7 +237,7 @@ def run_inference(
         modelpath=str(model_path),
         batch_size=batch_size,
         workers=workers,
-        cuda=False,
+        device=get_env_device(),
         print_freq=20,
         shuffle=False,
         output_csv=str(output_csv),
@@ -359,13 +360,13 @@ def merge_predictions(
             writer.writerow(
                 [
                     row["material_id"],
-                    f"{row["target_m"]:.16g}",
+                    f"{row['target_m']:.16g}",
                     row["classifier_target"],
                     row["classifier_predicted_class"],
-                    f"{row["classifier_positive_probability"]:.16g}",
-                    f"{row["small_regressor_prediction"]:.16g}",
-                    f"{row["large_regressor_prediction"]:.16g}",
-                    f"{row["final_prediction"]:.16g}",
+                    f"{row['classifier_positive_probability']:.16g}",
+                    f"{row['small_regressor_prediction']:.16g}",
+                    f"{row['large_regressor_prediction']:.16g}",
+                    f"{row['final_prediction']:.16g}",
                 ]
             )
 

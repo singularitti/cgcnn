@@ -178,13 +178,14 @@ def save_checkpoint(state, is_best, filename="checkpoint.pth.tar"):
         shutil.copyfile(filename, "model_best.pth.tar")
 
 
-def _prepare_inputs_targets(input, target, normalizer, cuda, task):
-    if cuda:
+def _prepare_inputs_targets(input, target, normalizer, device, task):
+    non_blocking = device.type != "cpu"
+    if device.type != "cpu":
         input_var = (
-            Variable(input[0].cuda(non_blocking=True)),
-            Variable(input[1].cuda(non_blocking=True)),
-            input[2].cuda(non_blocking=True),
-            [crys_idx.cuda(non_blocking=True) for crys_idx in input[3]],
+            Variable(input[0].to(device, non_blocking=non_blocking)),
+            Variable(input[1].to(device, non_blocking=non_blocking)),
+            input[2].to(device, non_blocking=non_blocking),
+            [crys_idx.to(device, non_blocking=non_blocking) for crys_idx in input[3]],
         )
     else:
         input_var = (Variable(input[0]), Variable(input[1]), input[2], input[3])
@@ -192,8 +193,8 @@ def _prepare_inputs_targets(input, target, normalizer, cuda, task):
         target_normed = normalizer.norm(target)
     else:
         target_normed = target.view(-1).long()
-    if cuda:
-        target_var = Variable(target_normed.cuda(non_blocking=True))
+    if device.type != "cpu":
+        target_var = Variable(target_normed.to(device, non_blocking=non_blocking))
     else:
         target_var = Variable(target_normed)
     return input_var, target_var
@@ -307,7 +308,7 @@ def _validate(
     model,
     criterion,
     normalizer,
-    cuda,
+    device,
     task,
     test=False,
     print_freq=10,
@@ -334,7 +335,7 @@ def _validate(
     end = time.time()
     for i, (input, target, batch_cif_ids) in enumerate(val_loader):
         input_var, target_var = _prepare_inputs_targets(
-            input, target, normalizer, cuda, task
+            input, target, normalizer, device, task
         )
         output, loss = _forward_and_loss(model, input_var, target_var, criterion)
         _update_metrics(

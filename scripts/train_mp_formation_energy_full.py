@@ -25,6 +25,7 @@ os.environ["PYTHONWARNINGS"] = ",".join([
 ])
 
 from cgcnn.training import train_model
+from cgcnn.device import get_env_device
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -98,7 +99,7 @@ def main() -> None:
         epochs=100,
         batch_size=256,
         workers=8,
-        cuda=None,
+        device=get_env_device(),
         initialize_from=str(PRETRAINED),
         checkpoint_dir=str(CHECKPOINT_DIR),
         metrics_history_path=str(METRICS_PATH),

@@ -21,6 +21,7 @@ warnings.filterwarnings(
     message=".*not find enough neighbors to build graph.*",
 )
 
+from cgcnn.device import get_env_device
 from cgcnn.training import train_model
 from analyze_parity import compute_metrics, load_results, make_plot
 
@@ -44,7 +45,7 @@ if __name__ == "__main__":
         epochs=epochs,
         batch_size=batch_size,
         workers=workers,
-        cuda=False,
+        device=get_env_device(),
         train_ratio=0.8,
         val_ratio=0.1,
         test_ratio=0.1,

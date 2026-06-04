@@ -16,6 +16,7 @@ from torch import nn, optim
 from torch.optim.lr_scheduler import MultiStepLR
 
 from .data import CIFData, collate_pool, get_train_val_test_loader
+from .device import resolve_device, use_pinned_memory
 from .model import CrystalGraphConvNet
 from .process_cleanup import (
     cleanup_orphaned_python_workers,
@@ -36,17 +37,6 @@ from .utils import (
 __all__ = ["train_model"]
 
 
-def _to_device(obj, cuda: bool):
-    if cuda:
-        if isinstance(obj, tuple):
-            return tuple(_to_device(x, cuda) for x in obj)
-        try:
-            return obj.cuda(non_blocking=True)
-        except Exception:
-            return obj
-    return obj
-
-
 def train_model(
     root_dir: str,
     task: str = "regression",
@@ -60,6 +50,7 @@ def train_model(
     n_conv: int = 3,
     n_h: int = 1,
     cuda: bool | None = None,
+    device: str | torch.device | None = None,
     workers: int = 0,
     weight_decay: float = 0.0,
     momentum: float = 0.9,
@@ -99,8 +90,7 @@ def train_model(
     -------
     path to the best saved model file (model_best.pth.tar) if saved, else None.
     """
-    if cuda is None:
-        cuda = torch.cuda.is_available()
+    device = resolve_device(device=device, cuda=cuda)
     cleaned_pids = cleanup_orphaned_python_workers(sys.executable)
     if cleaned_pids:
         print(f"Cleaned orphaned Python worker processes: {cleaned_pids}")
@@ -148,7 +138,7 @@ def train_model(
         num_workers=workers,
         val_ratio=val_ratio,
         test_ratio=test_ratio,
-        pin_memory=cuda,
+        pin_memory=use_pinned_memory(device),
         train_size=train_size,
         val_size=val_size,
         test_size=test_size,
@@ -194,8 +184,7 @@ def train_model(
         n_targets=n_targets,
         n_classes=n_classes or 2,
     )
-    if cuda:
-        model.cuda()
+    model.to(device)
 
     # define loss func and optimizer
     if task == "classification":
@@ -206,8 +195,8 @@ def train_model(
                     f"Expected {n_classes} class weights, received {len(class_weights)}."
                 )
             criterion_weight = torch.tensor(class_weights, dtype=torch.float)
-            if cuda:
-                criterion_weight = criterion_weight.cuda()
+            if device.type != "cpu":
+                criterion_weight = criterion_weight.to(device)
         criterion = nn.NLLLoss(weight=criterion_weight)
     else:
         criterion = nn.MSELoss()
@@ -223,7 +212,7 @@ def train_model(
     # optionally initialize model weights without restoring optimizer/normalizer
     if initialize_from and not resume:
         if os.path.isfile(initialize_from):
-            checkpoint = torch.load(initialize_from, map_location=(lambda s, l: s))
+            checkpoint = torch.load(initialize_from, map_location="cpu")
             state_dict = checkpoint.get("state_dict", checkpoint)
             model.load_state_dict(state_dict)
         else:
@@ -233,7 +222,7 @@ def train_model(
     best_validation_score = 1e10 if task == "regression" else float("-inf")
     if resume:
         if os.path.isfile(resume):
-            checkpoint = torch.load(resume, map_location=(lambda s, l: s))
+            checkpoint = torch.load(resume, map_location="cpu")
             start_epoch = checkpoint.get("epoch", start_epoch)
             best_validation_score = checkpoint.get(
                 "best_validation_score",
@@ -270,7 +259,7 @@ def train_model(
             optimizer,
             epoch,
             normalizer,
-            cuda,
+            device,
             task,
             print_freq,
         )
@@ -279,7 +268,7 @@ def train_model(
             model,
             criterion,
             normalizer,
-            cuda,
+            device,
             task,
             test=False,
             print_freq=10,
@@ -369,14 +358,14 @@ def train_model(
 
     # test best model if requested
     if best_checkpoint_path and os.path.exists(best_checkpoint_path):
-        checkpoint = torch.load(best_checkpoint_path, map_location=(lambda s, l: s))
+        checkpoint = torch.load(best_checkpoint_path, map_location="cpu")
         model.load_state_dict(checkpoint["state_dict"])
         _validate(
             test_loader,
             model,
             criterion,
             normalizer,
-            cuda,
+            device,
             task,
             test=True,
             print_freq=10,
@@ -388,7 +377,7 @@ def train_model(
 
 
 def _train_epoch(
-    train_loader, model, criterion, optimizer, epoch, normalizer, cuda, task, print_freq
+    train_loader, model, criterion, optimizer, epoch, normalizer, device, task, print_freq
 ):
     # Simple version of original main.train that uses local arguments
     batch_time = AverageMeter()
@@ -407,7 +396,7 @@ def _train_epoch(
     for i, (input, target, _) in enumerate(train_loader):
         data_time.update(time.time() - end)
         input_var, target_var = _prepare_inputs_targets(
-            input, target, normalizer, cuda, task
+            input, target, normalizer, device, task
         )
         output, loss = _forward_and_loss(model, input_var, target_var, criterion)
         _update_metrics(

@@ -236,6 +236,7 @@ def prepare_dataset(
 
 
 def train(run_dir: Path, epochs: int, batch_size: int, workers: int) -> Path | None:
+    from cgcnn.device import get_env_device
     from cgcnn.training import train_model
 
     print("Starting CGCNN training", flush=True)
@@ -248,7 +249,7 @@ def train(run_dir: Path, epochs: int, batch_size: int, workers: int) -> Path | N
         epochs=epochs,
         batch_size=batch_size,
         workers=workers,
-        cuda=False,
+        device=get_env_device(),
         train_ratio=0.8,
         val_ratio=0.1,
         test_ratio=0.1,

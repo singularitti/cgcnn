@@ -15,6 +15,7 @@ from cgcnn.data import (
     AtomCustomJSONInitializer,
     GaussianDistance,
 )
+from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 
 
@@ -134,7 +135,7 @@ def predict_chunk(
         modelpath=model_path,
         batch_size=batch_size,
         workers=0,
-        cuda=False,
+        device=get_env_device(),
         print_freq=print_freq,
         shuffle=False,
         output_csv=str(output_csv),

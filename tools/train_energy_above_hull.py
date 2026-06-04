@@ -21,6 +21,7 @@ if str(SRC_ROOT) not in sys.path:
 if str(REPO_ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "tools"))
 
+from cgcnn.device import get_env_device
 from cgcnn.training import train_model
 
 
@@ -362,7 +363,7 @@ def main() -> None:
                 h_fea_len=args.h_fea_len,
                 n_conv=args.n_conv,
                 n_h=args.n_h,
-                cuda=False,
+                device=get_env_device(),
                 workers=args.workers,
                 weight_decay=args.weight_decay,
                 train_ratio=args.train_ratio,
@@ -383,7 +384,7 @@ def main() -> None:
                 args.run_dir,
                 batch_size=args.batch_size,
                 workers=args.workers,
-                cuda=False,
+                device=get_env_device(),
                 checkpoint_dir=args.run_dir / "checkpoints",
             )
 

@@ -27,6 +27,7 @@ from analyze_parity import (
     make_plot,
 )
 from cgcnn.data import CIFData
+from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 
 EPOCH_PATTERN = re.compile(r"epoch_(\d+)\.pth\.tar$")
@@ -171,7 +172,7 @@ def generate_plots_for_run(
     run_dir: Path,
     batch_size: int,
     workers: int,
-    cuda: bool,
+    device: str | None,
     checkpoint_dir: Path | None = None,
     max_epochs: int | None = None,
 ) -> None:
@@ -210,7 +211,7 @@ def generate_plots_for_run(
                 modelpath=str(checkpoint),
                 batch_size=batch_size,
                 workers=workers,
-                cuda=cuda,
+                device=device,
                 print_freq=20,
                 shuffle=False,
                 output_csv=str(epoch_csv),
@@ -262,7 +263,11 @@ def main() -> None:
     parser.add_argument("run_dir", type=Path, help="Run directory containing checkpoints and splits.")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--workers", type=int, default=10)
-    parser.add_argument("--cuda", action="store_true")
+    parser.add_argument(
+        "--device",
+        default=get_env_device(),
+        help="Torch device string such as cpu, cuda, cuda:1, xpu, or mps.",
+    )
     parser.add_argument("--checkpoint_dir", type=Path)
     parser.add_argument("--max_epoch", type=int)
     args = parser.parse_args()
@@ -270,7 +275,7 @@ def main() -> None:
         args.run_dir,
         batch_size=args.batch_size,
         workers=args.workers,
-        cuda=args.cuda,
+        device=args.device,
         checkpoint_dir=args.checkpoint_dir,
         max_epochs=args.max_epoch,
     )

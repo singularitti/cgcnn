@@ -18,6 +18,7 @@ os.environ["PYTHONWARNINGS"] = ",".join([
     "ignore:.*No Pauling electronegativity.*:UserWarning",
 ])
 
+from cgcnn.device import get_env_device
 from cgcnn.training import train_model
 
 
@@ -38,7 +39,7 @@ def main() -> None:
         epochs=1,
         batch_size=64,
         workers=4,
-        cuda=False,
+        device=get_env_device(),
         checkpoint_dir=str(CHECKPOINT_DIR),
         metrics_history_path=str(METRICS_PATH),
         print_freq=1,

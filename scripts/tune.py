@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from cgcnn.data import CIFData
+from cgcnn.device import get_env_device
 from cgcnn.training import train_model
 
 DEFAULT_SEARCH_SPACE = {
@@ -44,8 +45,12 @@ def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+    for module_name in ("cuda", "xpu", "mps", "hpu", "mtia"):
+        module = getattr(torch, module_name, None)
+        is_available = getattr(module, "is_available", None)
+        manual_seed_all = getattr(module, "manual_seed_all", None)
+        if callable(is_available) and is_available() and callable(manual_seed_all):
+            manual_seed_all(seed)
 
 
 def cfg_to_string(cfg):
@@ -261,7 +266,7 @@ def run_single_trial(data_dir, out_dir, cfg, seed, epochs):
             h_fea_len=cfg["h_fea_len"],
             n_conv=cfg["n_conv"],
             n_h=cfg["n_h"],
-            cuda=False,
+            device=get_env_device(),
             workers=0,
             weight_decay=cfg["weight_decay"],
             momentum=0.9,

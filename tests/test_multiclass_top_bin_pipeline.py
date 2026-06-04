@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from cgcnn.inference import predict_model
+from cgcnn.device import get_env_device
 from cgcnn.model import CrystalGraphConvNet
 
 
@@ -91,7 +92,7 @@ class MulticlassTopBinPipelineTests(unittest.TestCase):
                 modelpath=str(checkpoint_path),
                 batch_size=2,
                 workers=0,
-                cuda=False,
+                device=get_env_device(),
                 output_csv=str(output_csv),
             )
 

@@ -20,6 +20,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 
 from analyze_parity import compute_metrics, load_results, make_plot  # noqa: E402
 from cgcnn.data import CIFData, collate_pool  # noqa: E402
+from cgcnn.device import get_env_device, resolve_device  # noqa: E402
 from cgcnn.model import CrystalGraphConvNet  # noqa: E402
 from cgcnn.utils import Normalizer, _validate  # noqa: E402
 
@@ -148,12 +149,14 @@ def evaluate_epoch(checkpoint_path: Path, dataset: CIFData, loader: DataLoader) 
 
     model, normalizer = load_model(checkpoint_path, dataset)
     criterion = nn.MSELoss()
+    device = resolve_device(device=get_env_device())
+    model.to(device)
     _validate(
         loader,
         model,
         criterion,
         normalizer,
-        cuda=False,
+        device=device,
         task="regression",
         test=True,
         print_freq=1000,

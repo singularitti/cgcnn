@@ -22,6 +22,7 @@ if str(REPO_ROOT / "tools") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "tools"))
 
 
+from cgcnn.device import get_env_device
 DEFAULT_SOURCE_ROOT = Path("/Users/qz/Downloads/cifs")
 DEFAULT_SUMMARY_CSV = DEFAULT_SOURCE_ROOT / "mp_all_summary.csv"
 DEFAULT_RUNS_ROOT = Path("/Users/qz/Downloads/runs")
@@ -227,7 +228,7 @@ def main() -> None:
             epochs=epochs,
             batch_size=batch_size,
             workers=workers,
-            cuda=False,
+            device=get_env_device(),
             train_ids=split_map["train"],
             val_ids=split_map["val"],
             test_ids=split_map["test"],
@@ -251,7 +252,7 @@ def main() -> None:
             modelpath=str(best_model),
             batch_size=batch_size,
             workers=workers,
-            cuda=False,
+            device=get_env_device(),
             print_freq=20,
             shuffle=False,
             output_csv=str(run_dir / "test_results.csv"),

@@ -17,6 +17,7 @@ if str(REPO_ROOT / "tools") not in sys.path:
 
 from analyze_parity import compute_metrics, make_loglog_plot, make_plot
 from cgcnn.data import CIFData
+from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 
 
@@ -68,7 +69,7 @@ def main() -> None:
             modelpath=str(checkpoint_path),
             batch_size=args.batch_size,
             workers=args.workers,
-            cuda=False,
+            device=get_env_device(),
             print_freq=args.print_freq,
             shuffle=False,
             output_csv=str(csv_path),

@@ -10,6 +10,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from .data import CIFData, collate_pool
+from .device import resolve_device, use_pinned_memory
 from .model import CrystalGraphConvNet
 from .process_cleanup import (
     cleanup_orphaned_python_workers,
@@ -36,6 +37,7 @@ def predict_model(
     batch_size: int = 256,
     workers: int = 0,
     cuda: bool | None = None,
+    device: str | torch.device | None = None,
     print_freq: int = 10,
     shuffle: bool = False,
     output_csv: str = "test_results.csv",
@@ -44,8 +46,7 @@ def predict_model(
 
     Returns the path to the CSV file written (`test_results.csv`) or None on failure.
     """
-    if cuda is None:
-        cuda = torch.cuda.is_available()
+    device = resolve_device(device=device, cuda=cuda)
     cleaned_pids = cleanup_orphaned_python_workers(sys.executable)
     if cleaned_pids:
         print(f"Cleaned orphaned Python worker processes: {cleaned_pids}")
@@ -63,7 +64,7 @@ def predict_model(
     if model is None:
         if modelpath is None or not os.path.isfile(modelpath):
             raise ValueError("Either model or valid modelpath must be provided")
-        checkpoint = torch.load(modelpath, map_location=(lambda s, l: s))
+        checkpoint = torch.load(modelpath, map_location="cpu")
         args = checkpoint.get("args", {})
         task = task or args.get("task", "regression")
         atom_fea_len = atom_fea_len or args.get("atom_fea_len", 64)
@@ -89,7 +90,7 @@ def predict_model(
         shuffle=shuffle,
         num_workers=workers,
         collate_fn=collate_fn,
-        pin_memory=cuda,
+        pin_memory=use_pinned_memory(device),
     )
     model_target_dim = n_targets
     if task == "regression" and dataset.n_targets != model_target_dim:
@@ -111,8 +112,7 @@ def predict_model(
             n_classes=n_classes or 2,
         )
         model.load_state_dict(checkpoint["state_dict"])  # will raise on mismatch
-    if cuda:
-        model.cuda()
+    model.to(device)
 
     if task == "classification":
         criterion = nn.NLLLoss()
@@ -136,7 +136,7 @@ def predict_model(
         model,
         criterion,
         normalizer,
-        cuda,
+        device,
         task,
         test=True,
         print_freq=print_freq,

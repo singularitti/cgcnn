@@ -29,6 +29,7 @@ if str(REPO_ROOT / "tools") not in sys.path:
 from analyze_parity import compute_metrics, make_plot
 
 from cgcnn.data import CIFData
+from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 from cgcnn.training import train_model
 
@@ -270,7 +271,7 @@ def run_training(
             epochs=epochs,
             batch_size=batch_size,
             workers=workers,
-            cuda=False,
+            device=get_env_device(),
             train_ids=train_ids,
             val_ids=val_ids,
             test_ids=test_ids,
@@ -350,7 +351,7 @@ def run_inference(
         modelpath=str(model_path),
         batch_size=batch_size,
         workers=workers,
-        cuda=False,
+        device=get_env_device(),
         print_freq=20,
         shuffle=False,
         output_csv=str(output_csv),
