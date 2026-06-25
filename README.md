@@ -19,6 +19,7 @@ The following paper describes the details of the CGCNN framework:
   - [Define a customized dataset](#define-a-customized-dataset)
   - [Train a CGCNN model](#train-a-cgcnn-model)
   - [Predict material properties with a pre-trained CGCNN model](#predict-material-properties-with-a-pre-trained-cgcnn-model)
+  - [Use graph caches](#use-graph-caches)
 - [Data](#data)
 - [Authors](#authors)
 - [License](#license)
@@ -202,6 +203,13 @@ predict_model("pre-trained/formation-energy-per-atom.pth.tar", "data/sample-regr
 
 Both functions mirror the behavior of the old `main.py` and `predict.py` scripts but are provided as library functions to import in your code.
 
+### Use graph caches
+
+For large CIF datasets, CGCNN can train from a precomputed graph cache instead of
+opening every CIF file during training. See [CGCNN Graph Caches](docs/graph_cache.md)
+for the old v1 cache layout, v2 label-task layout, compatibility notes, and
+examples for reusing one graph cache with different target properties.
+
 ## Data
 
 To reproduce our paper, you can download the corresponding datasets following the [instruction](data/material-data).
@@ -213,4 +221,3 @@ This software was primarily written by [Tian Xie](http://txie.me) who was advise
 ## License
 
 CGCNN is released under the MIT License.
-

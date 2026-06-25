@@ -4,7 +4,9 @@ import json
 import os
 import random
 import warnings
+from collections import OrderedDict
 from collections.abc import Iterable
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -16,10 +18,14 @@ from torch.utils.data.sampler import SubsetRandomSampler
 __all__ = [
     "AtomCustomJSONInitializer",
     "AtomInitializer",
+    "CachedGraphData",
     "CIFData",
     "GaussianDistance",
+    "build_crystal_graph",
     "collate_pool",
     "get_train_val_test_loader",
+    "graph_arrays_to_tensors",
+    "load_cif_structure",
 ]
 
 
@@ -306,6 +312,213 @@ class AtomCustomJSONInitializer(AtomInitializer):
             self._embedding[key] = np.array(value, dtype=float)
 
 
+def load_cif_structure(cif_path: os.PathLike | str) -> Structure:
+    """Load one CIF file as a pymatgen Structure."""
+    return Structure.from_file(str(cif_path))
+
+
+def build_crystal_graph(
+    crystal: Structure,
+    atom_initializer: AtomInitializer,
+    gaussian_distance: GaussianDistance,
+    max_num_nbr: int = 12,
+    radius: float = 8,
+    cif_id: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build CGCNN graph arrays from an already-loaded crystal structure."""
+    atom_fea = np.vstack([
+        atom_initializer.get_atom_fea(crystal[i].specie.number)
+        for i in range(len(crystal))
+    ]).astype(np.float32, copy=False)
+    all_nbrs = crystal.get_all_neighbors(radius, include_index=True)
+    all_nbrs = [sorted(nbrs, key=lambda x: x[1]) for nbrs in all_nbrs]
+    nbr_fea_idx, nbr_fea = [], []
+    for nbr in all_nbrs:
+        if len(nbr) < max_num_nbr:
+            prefix = f"{cif_id} " if cif_id is not None else ""
+            warnings.warn(
+                f"{prefix}not find enough neighbors to build graph. "
+                "If it happens frequently, consider increase "
+                "radius."
+            )
+            nbr_fea_idx.append(
+                list(map(lambda x: x[2], nbr)) + [0] * (max_num_nbr - len(nbr))
+            )
+            nbr_fea.append(
+                list(map(lambda x: x[1], nbr))
+                + [radius + 1.0] * (max_num_nbr - len(nbr))
+            )
+        else:
+            nbr_fea_idx.append(list(map(lambda x: x[2], nbr[:max_num_nbr])))
+            nbr_fea.append(list(map(lambda x: x[1], nbr[:max_num_nbr])))
+    nbr_fea_idx = np.array(nbr_fea_idx, dtype=np.int64)
+    nbr_fea = gaussian_distance.expand(np.array(nbr_fea, dtype=np.float32))
+    nbr_fea = nbr_fea.astype(np.float32, copy=False)
+    return atom_fea, nbr_fea, nbr_fea_idx
+
+
+def graph_arrays_to_tensors(
+    atom_fea: np.ndarray,
+    nbr_fea: np.ndarray,
+    nbr_fea_idx: np.ndarray,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Convert cached or freshly-built graph arrays to CGCNN tensors."""
+    return (
+        torch.as_tensor(np.ascontiguousarray(atom_fea), dtype=torch.float32),
+        torch.as_tensor(np.ascontiguousarray(nbr_fea), dtype=torch.float32),
+        torch.as_tensor(np.ascontiguousarray(nbr_fea_idx), dtype=torch.long),
+    )
+
+
+class CachedGraphData(Dataset):
+    """
+    Dataset wrapper for a sharded CGCNN graph cache.
+
+    The cache stores primitive NumPy arrays in shard `.npz` files and returns
+    the same item structure as CIFData:
+    ((atom_fea, nbr_fea, nbr_fea_idx), target, cif_id).
+    """
+
+    def __init__(
+        self,
+        cache_dir,
+        id_prop_file: os.PathLike | str | None = None,
+        random_seed=123,
+        shuffle=True,
+        include_ids: Iterable[str] | None = None,
+        max_cached_shards: int = 4,
+    ):
+        self.cache_dir = Path(cache_dir)
+        if not self.cache_dir.exists():
+            raise FileNotFoundError(f"cache_dir does not exist: {self.cache_dir}")
+        manifest_file = self.cache_dir / "manifest.json"
+        if not manifest_file.is_file():
+            raise FileNotFoundError(f"manifest.json does not exist: {manifest_file}")
+        with manifest_file.open() as handle:
+            self.manifest = json.load(handle)
+        supported_schemas = {"cgcnn_graph_cache_v1", "cgcnn_graph_cache_v2"}
+        if self.manifest.get("schema_version") not in supported_schemas:
+            raise ValueError(
+                "Unsupported graph cache schema: "
+                f"{self.manifest.get('schema_version')}"
+            )
+        self.shards_dir = self.cache_dir / "shards"
+        if not self.shards_dir.is_dir():
+            raise FileNotFoundError(f"Shard directory does not exist: {self.shards_dir}")
+
+        self.index = self.manifest.get("index")
+        if not isinstance(self.index, dict):
+            raise ValueError("manifest.json must contain an object-valued index.")
+
+        id_prop_file = self._resolve_id_prop_file(id_prop_file)
+        if not id_prop_file.is_file():
+            raise FileNotFoundError(f"id_prop.csv does not exist: {id_prop_file}")
+        self.id_prop_file = id_prop_file
+        with id_prop_file.open() as f:
+            reader = csv.reader(f)
+            self.id_prop_data = [row for row in reader if row]
+        if include_ids is not None:
+            include_ids = set(include_ids)
+            self.id_prop_data = [
+                row for row in self.id_prop_data if row and row[0] in include_ids
+            ]
+        if not self.id_prop_data:
+            raise ValueError("id_prop.csv is empty!")
+        self.n_targets = len(self.id_prop_data[0]) - 1
+        if self.n_targets < 1:
+            raise ValueError("id_prop.csv must contain at least one target column.")
+        for row in self.id_prop_data:
+            if len(row) != self.n_targets + 1:
+                raise ValueError(
+                    "All rows in id_prop.csv must have the same number of columns. "
+                    "Expected {} target columns but got {} for id {}.".format(
+                        self.n_targets, len(row) - 1, row[0] if row else "unknown"
+                    )
+                )
+            if row[0] not in self.index:
+                raise ValueError(f"Cached graph index is missing id {row[0]}.")
+        if shuffle:
+            random.seed(random_seed)
+            random.shuffle(self.id_prop_data)
+
+        self.max_cached_shards = max_cached_shards
+        self._shard_cache: OrderedDict[str, dict[str, np.ndarray]] = OrderedDict()
+
+    def __len__(self):
+        return len(self.id_prop_data)
+
+    def _resolve_id_prop_file(self, id_prop_file: os.PathLike | str | None) -> Path:
+        if id_prop_file is not None:
+            path = Path(id_prop_file)
+            return path if path.is_absolute() else self.cache_dir / path
+
+        default_label = self.manifest.get("default_label")
+        labels = self.manifest.get("labels")
+        if isinstance(default_label, str) and isinstance(labels, dict):
+            label_meta = labels.get(default_label)
+            if isinstance(label_meta, dict) and "id_prop_file" in label_meta:
+                path = Path(label_meta["id_prop_file"])
+                return path if path.is_absolute() else self.cache_dir / path
+
+        return self.cache_dir / "id_prop.csv"
+
+    @staticmethod
+    def _decode_id(value) -> str:
+        if isinstance(value, bytes):
+            return value.decode("utf-8")
+        if isinstance(value, np.bytes_):
+            return bytes(value).decode("utf-8")
+        return str(value)
+
+    @staticmethod
+    def _entry_location(entry) -> tuple[str, int]:
+        if isinstance(entry, dict):
+            return str(entry["shard"]), int(entry["row"])
+        if isinstance(entry, (list, tuple)) and len(entry) == 2:
+            return str(entry[0]), int(entry[1])
+        raise ValueError(f"Invalid graph cache index entry: {entry!r}")
+
+    def _load_shard(self, shard_name: str) -> dict[str, np.ndarray]:
+        if shard_name in self._shard_cache:
+            shard = self._shard_cache.pop(shard_name)
+            self._shard_cache[shard_name] = shard
+            return shard
+
+        shard_path = self.shards_dir / shard_name
+        if not shard_path.is_file():
+            raise FileNotFoundError(f"Shard not found: {shard_path}")
+        with np.load(shard_path, allow_pickle=False) as data:
+            shard = {key: data[key] for key in data.files}
+        self._shard_cache[shard_name] = shard
+        while len(self._shard_cache) > self.max_cached_shards:
+            self._shard_cache.popitem(last=False)
+        return shard
+
+    def __getitem__(self, idx):
+        row = self.id_prop_data[idx]
+        cif_id, target_values = row[0], row[1:]
+        shard_name, row_index = self._entry_location(self.index[cif_id])
+        shard = self._load_shard(shard_name)
+        shard_cif_id = self._decode_id(shard["ids"][row_index])
+        if shard_cif_id != cif_id:
+            raise ValueError(
+                f"Manifest index mismatch for {cif_id}: shard row contains {shard_cif_id}"
+            )
+        atom_offsets = shard["atom_offsets"]
+        start = int(atom_offsets[row_index])
+        end = int(atom_offsets[row_index + 1])
+        atom_fea, nbr_fea, nbr_fea_idx = graph_arrays_to_tensors(
+            shard["atom_fea"][start:end],
+            shard["nbr_fea"][start:end],
+            shard["nbr_fea_idx"][start:end],
+        )
+        target = torch.as_tensor(
+            [float(value) for value in target_values],
+            dtype=torch.float32,
+        )
+        return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id
+
+
 class CIFData(Dataset):
     """
     The CIFData dataset is a wrapper for a dataset where the crystal structures
@@ -408,35 +621,19 @@ class CIFData(Dataset):
     def __getitem__(self, idx):
         row = self.id_prop_data[idx]
         cif_id, target_values = row[0], row[1:]
-        crystal = Structure.from_file(os.path.join(self.root_dir, cif_id + ".cif"))
-        atom_fea = np.vstack([
-            self.ari.get_atom_fea(crystal[i].specie.number) for i in range(len(crystal))
-        ])
-        atom_fea = torch.Tensor(atom_fea)
-        all_nbrs = crystal.get_all_neighbors(self.radius, include_index=True)
-        all_nbrs = [sorted(nbrs, key=lambda x: x[1]) for nbrs in all_nbrs]
-        nbr_fea_idx, nbr_fea = [], []
-        for nbr in all_nbrs:
-            if len(nbr) < self.max_num_nbr:
-                warnings.warn(
-                    f"{cif_id} not find enough neighbors to build graph. "
-                    "If it happens frequently, consider increase "
-                    "radius."
-                )
-                nbr_fea_idx.append(
-                    list(map(lambda x: x[2], nbr)) + [0] * (self.max_num_nbr - len(nbr))
-                )
-                nbr_fea.append(
-                    list(map(lambda x: x[1], nbr))
-                    + [self.radius + 1.0] * (self.max_num_nbr - len(nbr))
-                )
-            else:
-                nbr_fea_idx.append(list(map(lambda x: x[2], nbr[: self.max_num_nbr])))
-                nbr_fea.append(list(map(lambda x: x[1], nbr[: self.max_num_nbr])))
-        nbr_fea_idx, nbr_fea = np.array(nbr_fea_idx), np.array(nbr_fea)
-        nbr_fea = self.gdf.expand(nbr_fea)
-        atom_fea = torch.Tensor(atom_fea)  # This line is useless
-        nbr_fea = torch.Tensor(nbr_fea)
-        nbr_fea_idx = torch.LongTensor(nbr_fea_idx)
-        target = torch.Tensor([float(value) for value in target_values])
+        crystal = load_cif_structure(os.path.join(self.root_dir, cif_id + ".cif"))
+        atom_fea, nbr_fea, nbr_fea_idx = graph_arrays_to_tensors(
+            *build_crystal_graph(
+                crystal,
+                self.ari,
+                self.gdf,
+                max_num_nbr=self.max_num_nbr,
+                radius=self.radius,
+                cif_id=cif_id,
+            )
+        )
+        target = torch.as_tensor(
+            [float(value) for value in target_values],
+            dtype=torch.float32,
+        )
         return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id
