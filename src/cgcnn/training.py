@@ -15,7 +15,7 @@ import torch
 from torch import nn, optim
 from torch.optim.lr_scheduler import MultiStepLR
 
-from .data import CIFData, collate_pool, get_train_val_test_loader
+from .data import CachedGraphData, CIFData, collate_pool, get_train_val_test_loader
 from .device import resolve_device, use_pinned_memory
 from .model import CrystalGraphConvNet
 from .process_cleanup import (
@@ -75,6 +75,7 @@ def train_model(
     classification_metric_class_index: int | None = None,
     early_stopping_patience: int | None = None,
     early_stopping_min_delta: float = 0.0,
+    dataset_format: str = "cif",
 ):
     """Train a CGCNN model.
 
@@ -113,7 +114,20 @@ def train_model(
             "auc" if n_classes == 2 else "macro_f1"
         )
     explicit_split_ids = any(ids is not None for ids in [train_ids, val_ids, test_ids])
-    dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
+    if dataset_format == "cif":
+        dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
+    elif dataset_format == "graph_cache":
+        dataset = CachedGraphData(root_dir, shuffle=not explicit_split_ids)
+    elif dataset_format == "auto":
+        manifest_path = os.path.join(root_dir, "manifest.json")
+        if os.path.isfile(manifest_path):
+            dataset = CachedGraphData(root_dir, shuffle=not explicit_split_ids)
+        else:
+            dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
+    else:
+        raise ValueError(
+            "dataset_format must be one of 'cif', 'graph_cache', or 'auto'."
+        )
     train_indices = val_indices = test_indices = None
     if explicit_split_ids:
         if train_ids is None or val_ids is None or test_ids is None:
