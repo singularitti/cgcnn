@@ -76,6 +76,7 @@ def train_model(
     early_stopping_patience: int | None = None,
     early_stopping_min_delta: float = 0.0,
     dataset_format: str = "cif",
+    id_prop_file: str | None = None,
 ):
     """Train a CGCNN model.
 
@@ -115,14 +116,28 @@ def train_model(
         )
     explicit_split_ids = any(ids is not None for ids in [train_ids, val_ids, test_ids])
     if dataset_format == "cif":
+        if id_prop_file is not None:
+            raise ValueError("id_prop_file is only supported for graph_cache datasets.")
         dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
     elif dataset_format == "graph_cache":
-        dataset = CachedGraphData(root_dir, shuffle=not explicit_split_ids)
+        dataset = CachedGraphData(
+            root_dir,
+            id_prop_file=id_prop_file,
+            shuffle=not explicit_split_ids,
+        )
     elif dataset_format == "auto":
         manifest_path = os.path.join(root_dir, "manifest.json")
         if os.path.isfile(manifest_path):
-            dataset = CachedGraphData(root_dir, shuffle=not explicit_split_ids)
+            dataset = CachedGraphData(
+                root_dir,
+                id_prop_file=id_prop_file,
+                shuffle=not explicit_split_ids,
+            )
         else:
+            if id_prop_file is not None:
+                raise ValueError(
+                    "id_prop_file is only supported when auto resolves to graph_cache."
+                )
             dataset = CIFData(root_dir, shuffle=not explicit_split_ids)
     else:
         raise ValueError(

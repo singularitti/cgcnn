@@ -382,6 +382,7 @@ class CachedGraphData(Dataset):
     def __init__(
         self,
         cache_dir,
+        id_prop_file: os.PathLike | str | None = None,
         random_seed=123,
         shuffle=True,
         include_ids: Iterable[str] | None = None,
@@ -395,7 +396,8 @@ class CachedGraphData(Dataset):
             raise FileNotFoundError(f"manifest.json does not exist: {manifest_file}")
         with manifest_file.open() as handle:
             self.manifest = json.load(handle)
-        if self.manifest.get("schema_version") != "cgcnn_graph_cache_v1":
+        supported_schemas = {"cgcnn_graph_cache_v1", "cgcnn_graph_cache_v2"}
+        if self.manifest.get("schema_version") not in supported_schemas:
             raise ValueError(
                 "Unsupported graph cache schema: "
                 f"{self.manifest.get('schema_version')}"
@@ -408,9 +410,10 @@ class CachedGraphData(Dataset):
         if not isinstance(self.index, dict):
             raise ValueError("manifest.json must contain an object-valued index.")
 
-        id_prop_file = self.cache_dir / "id_prop.csv"
+        id_prop_file = self._resolve_id_prop_file(id_prop_file)
         if not id_prop_file.is_file():
             raise FileNotFoundError(f"id_prop.csv does not exist: {id_prop_file}")
+        self.id_prop_file = id_prop_file
         with id_prop_file.open() as f:
             reader = csv.reader(f)
             self.id_prop_data = [row for row in reader if row]
@@ -443,6 +446,21 @@ class CachedGraphData(Dataset):
 
     def __len__(self):
         return len(self.id_prop_data)
+
+    def _resolve_id_prop_file(self, id_prop_file: os.PathLike | str | None) -> Path:
+        if id_prop_file is not None:
+            path = Path(id_prop_file)
+            return path if path.is_absolute() else self.cache_dir / path
+
+        default_label = self.manifest.get("default_label")
+        labels = self.manifest.get("labels")
+        if isinstance(default_label, str) and isinstance(labels, dict):
+            label_meta = labels.get(default_label)
+            if isinstance(label_meta, dict) and "id_prop_file" in label_meta:
+                path = Path(label_meta["id_prop_file"])
+                return path if path.is_absolute() else self.cache_dir / path
+
+        return self.cache_dir / "id_prop.csv"
 
     @staticmethod
     def _decode_id(value) -> str:
@@ -477,7 +495,8 @@ class CachedGraphData(Dataset):
         return shard
 
     def __getitem__(self, idx):
-        cif_id = self.id_prop_data[idx][0]
+        row = self.id_prop_data[idx]
+        cif_id, target_values = row[0], row[1:]
         shard_name, row_index = self._entry_location(self.index[cif_id])
         shard = self._load_shard(shard_name)
         shard_cif_id = self._decode_id(shard["ids"][row_index])
@@ -494,7 +513,7 @@ class CachedGraphData(Dataset):
             shard["nbr_fea_idx"][start:end],
         )
         target = torch.as_tensor(
-            np.ascontiguousarray(shard["targets"][row_index]),
+            [float(value) for value in target_values],
             dtype=torch.float32,
         )
         return (atom_fea, nbr_fea, nbr_fea_idx), target, cif_id
