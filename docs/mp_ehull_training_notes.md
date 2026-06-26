@@ -124,6 +124,13 @@ Outputs:
 - `training_history.json`.
 - Final prediction and evaluation files when the training script completes.
 
+## Model Selection Plots
+
+Use validation metrics, not test metrics, for checkpoint selection. Metrics-vs-epoch
+plots should be generated on the validation split and used to choose the epoch
+or checkpoint. Test metrics and test parity plots should be generated only after
+the checkpoint is selected, as final held-out reporting artifacts.
+
 The node-local scratch graph cache was an execution-time copy used for speed.
 The durable provenance remained the original graph cache, source CSV, CIF tree,
 and the prepared training folder.
