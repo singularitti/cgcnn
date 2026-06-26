@@ -271,7 +271,7 @@ ls /Users/qz/Downloads/cif/id_prop.csv
 
 ```bash
 # Navigate to repo root
-cd /Users/qz/.ghq/github.com/singularitti/cgcnn
+cd ~/cgcnn
 
 # Run tuning
 uv run python scripts/tune_cif_nh2_v3.py tune \

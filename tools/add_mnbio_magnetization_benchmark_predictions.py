@@ -22,7 +22,7 @@ BENCHMARK_CSV = Path(
     "magnetization_volume_summary.csv"
 ).expanduser()
 RUN_DIR = Path(
-    "/Users/qz/.ghq/github.com/singularitti/cgcnn/tmp/prediction_runs/"
+    "~/cgcnn/tmp/prediction_runs/"
     "mnbio_magnetization_combined_20260529_131358"
 )
 OUTPUTS_DIR = RUN_DIR / "outputs"
