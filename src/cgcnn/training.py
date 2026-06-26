@@ -12,6 +12,7 @@ import warnings
 from random import sample
 
 import torch
+import torch.multiprocessing as torch_mp
 from torch import nn, optim
 from torch.optim.lr_scheduler import MultiStepLR
 
@@ -93,6 +94,12 @@ def train_model(
     path to the best saved model file (model_best.pth.tar) if saved, else None.
     """
     device = resolve_device(device=device, cuda=cuda)
+    if workers > 0:
+        try:
+            torch_mp.set_sharing_strategy("file_system")
+            print("Using torch multiprocessing sharing strategy: file_system")
+        except RuntimeError as exc:
+            print(f"Could not set torch sharing strategy to file_system: {exc}")
     cleaned_pids = cleanup_orphaned_python_workers(sys.executable)
     if cleaned_pids:
         print(f"Cleaned orphaned Python worker processes: {cleaned_pids}")

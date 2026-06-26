@@ -386,7 +386,7 @@ class CachedGraphData(Dataset):
         random_seed=123,
         shuffle=True,
         include_ids: Iterable[str] | None = None,
-        max_cached_shards: int = 4,
+        max_cached_shards: int = 512,
     ):
         self.cache_dir = Path(cache_dir)
         if not self.cache_dir.exists():
