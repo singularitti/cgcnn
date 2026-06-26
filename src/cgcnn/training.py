@@ -78,6 +78,7 @@ def train_model(
     early_stopping_min_delta: float = 0.0,
     dataset_format: str = "cif",
     id_prop_file: str | None = None,
+    graph_cache_max_cached_shards: int = 512,
 ):
     """Train a CGCNN model.
 
@@ -131,6 +132,7 @@ def train_model(
             root_dir,
             id_prop_file=id_prop_file,
             shuffle=not explicit_split_ids,
+            max_cached_shards=graph_cache_max_cached_shards,
         )
     elif dataset_format == "auto":
         manifest_path = os.path.join(root_dir, "manifest.json")
@@ -139,6 +141,7 @@ def train_model(
                 root_dir,
                 id_prop_file=id_prop_file,
                 shuffle=not explicit_split_ids,
+                max_cached_shards=graph_cache_max_cached_shards,
             )
         else:
             if id_prop_file is not None:
@@ -199,10 +202,13 @@ def train_model(
             warnings.warn(
                 "Dataset has less than 500 data points. Lower accuracy is expected. "
             )
-            sample_data_list = [dataset[i] for i in range(len(dataset))]
+            target_rows = dataset.id_prop_data
         else:
-            sample_data_list = [dataset[i] for i in sample(range(len(dataset)), 500)]
-        _, sample_target, _ = collate_pool(sample_data_list)
+            target_rows = [dataset.id_prop_data[i] for i in sample(range(len(dataset)), 500)]
+        sample_target = torch.tensor(
+            [[float(value) for value in row[1:]] for row in target_rows],
+            dtype=torch.float32,
+        )
         normalizer = Normalizer(sample_target)
 
     # build model

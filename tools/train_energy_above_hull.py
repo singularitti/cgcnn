@@ -95,6 +95,34 @@ def parse_float(value: str) -> float | None:
     return parsed
 
 
+def transform_target(value: float, transform: str, scale: float) -> float:
+    if transform == "raw":
+        return value
+    if transform == "scaled_log1p":
+        if value < 0.0:
+            raise ValueError("scaled_log1p requires non-negative targets.")
+        if scale <= 0.0:
+            raise ValueError("--target-transform-scale must be positive.")
+        return math.log1p(value / scale)
+    raise ValueError(f"Unsupported target transform: {transform}")
+
+
+def transform_metadata(transform: str, scale: float) -> dict[str, object]:
+    payload: dict[str, object] = {"target_transform": transform}
+    if transform == "scaled_log1p":
+        payload.update(
+            {
+                "target_transform_formula": "z = log1p(energy_above_hull / scale)",
+                "target_transform_inverse_formula": (
+                    "energy_above_hull = scale * expm1(max(z, 0))"
+                ),
+                "target_transform_scale_eV_per_atom": scale,
+                "prediction_inverse_lower_bound": 0.0,
+            }
+        )
+    return payload
+
+
 def candidate_cif_paths(cif_root: Path, material_id: str) -> tuple[Path, Path]:
     return (
         cif_root / f"{material_id}.cif",
@@ -169,6 +197,47 @@ def write_csv_ids(path: Path, ids: list[str]) -> None:
         writer.writerows([[item] for item in ids])
 
 
+def write_id_prop(path: Path, records: list[tuple[str, float, Path]], transform: str, scale: float) -> None:
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        for material_id, value, _ in records:
+            writer.writerow([material_id, f"{transform_target(value, transform, scale):.16g}"])
+
+
+def write_physical_results(
+    transformed_results_csv: Path,
+    physical_results_csv: Path,
+    transform: str,
+    scale: float,
+) -> None:
+    rows: list[tuple[str, float, float]] = []
+    with transformed_results_csv.open(newline="") as handle:
+        reader = csv.reader(handle)
+        for row in reader:
+            if len(row) < 3:
+                continue
+            material_id = row[0]
+            target = transform_target_inverse(float(row[1]), transform, scale)
+            prediction = transform_target_inverse(float(row[2]), transform, scale)
+            rows.append((material_id, target, prediction))
+    if not rows:
+        raise ValueError(f"No usable rows found in {transformed_results_csv}")
+    with physical_results_csv.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerows(
+            (material_id, f"{target:.16g}", f"{prediction:.16g}")
+            for material_id, target, prediction in rows
+        )
+
+
+def transform_target_inverse(value: float, transform: str, scale: float) -> float:
+    if transform == "raw":
+        return value
+    if transform == "scaled_log1p":
+        return scale * math.expm1(max(value, 0.0))
+    raise ValueError(f"Unsupported target transform: {transform}")
+
+
 def read_csv_ids(path: Path) -> list[str]:
     ids: list[str] = []
     with path.open(newline="") as handle:
@@ -218,6 +287,9 @@ def prepare_run_dir(
     train_ratio: float,
     val_ratio: float,
     test_ratio: float,
+    target_transform: str,
+    target_transform_scale: float,
+    create_cif_symlinks: bool,
     args_payload: dict,
 ) -> dict:
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -246,13 +318,14 @@ def prepare_run_dir(
     if not records:
         raise RuntimeError("No usable energy_above_hull rows with matching CIF files.")
 
-    with (run_dir / "id_prop.csv").open("w", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerows((material_id, value) for material_id, value, _ in records)
+    if target_transform != "raw":
+        write_id_prop(run_dir / "id_prop_raw.csv", records, "raw", target_transform_scale)
+    write_id_prop(run_dir / "id_prop.csv", records, target_transform, target_transform_scale)
 
     ensure_symlink(run_dir / "atom_init.json", atom_init)
-    for material_id, _, cif_path in records:
-        ensure_symlink(run_dir / f"{material_id}.cif", cif_path)
+    if create_cif_symlinks:
+        for material_id, _, cif_path in records:
+            ensure_symlink(run_dir / f"{material_id}.cif", cif_path)
 
     ids = [material_id for material_id, _, _ in records]
     rng = random.Random(seed)
@@ -286,9 +359,15 @@ def prepare_run_dir(
             "id": "material_id",
             "target": "energy_above_hull",
         },
-        "target_transform": "raw",
+        **transform_metadata(target_transform, target_transform_scale),
         "cif_root": str(cif_root),
-        "cif_provenance": "Each top-level <material_id>.cif in the run folder is a symlink to the matching flat or nested CIF under cif_root.",
+        "cif_provenance": (
+            "Each top-level <material_id>.cif in the run folder is a symlink "
+            "to the matching flat or nested CIF under cif_root."
+            if create_cif_symlinks
+            else "No CIF symlinks were created in this run folder; graph inputs are read from the graph cache."
+        ),
+        "create_cif_symlinks": create_cif_symlinks,
         "atom_init": {
             "link": str(run_dir / "atom_init.json"),
             "target": str(atom_init),
@@ -308,9 +387,14 @@ def prepare_run_dir(
         "command_line_options": args_payload,
         "outputs": {
             "id_prop_csv": str(run_dir / "id_prop.csv"),
+            "id_prop_raw_csv": (
+                str(run_dir / "id_prop_raw.csv") if target_transform != "raw" else None
+            ),
             "checkpoints": str(run_dir / "checkpoints"),
             "training_history": str(run_dir / "training_history.json"),
             "test_results": str(run_dir / "test_results.csv"),
+            "test_results_physical": str(run_dir / "test_results_physical.csv"),
+            "parity_metrics_physical": str(run_dir / "parity_metrics_physical.json"),
             "epoch_parity": str(run_dir / "epoch_parity"),
             "log": str(run_dir / "run.log"),
             "markdown_log": str(run_dir / "TRAINING_LOG.md"),
@@ -331,7 +415,8 @@ from `{source_csv}`.
 - Source CSV: `{source_csv}`
 - ID column: `material_id`
 - Target column: `energy_above_hull`
-- CIF inputs: symlinked from matching flat or nested CIF paths under `{cif_root}`
+- Target transform: `{target_transform}`{f" with scale `{target_transform_scale}` eV/atom" if target_transform == "scaled_log1p" else ""}
+- CIF inputs: {f"symlinked from matching flat or nested CIF paths under `{cif_root}`" if create_cif_symlinks else "not symlinked; graph inputs are read from the graph cache"}
 - Atom features: symlink `{run_dir / "atom_init.json"}` -> `{atom_init}`
 - Split seed: `{seed}`
 - Split counts: train `{len(train_ids)}`, validation `{len(val_ids)}`, test `{len(test_ids)}`
@@ -342,8 +427,9 @@ CIF file was missing were also excluded.
 
 ## Outputs
 
-- `id_prop.csv`: CGCNN dataset target table.
-- `<material_id>.cif`: symlinks to the source CIF files.
+- `id_prop.csv`: active CGCNN target table after the configured target transform.
+- `id_prop_raw.csv`: raw `energy_above_hull` labels, present for transformed runs.
+- `<material_id>.cif`: {("symlinks to the source CIF files." if create_cif_symlinks else "not present for this graph-cache run.")}
 - `splits/`: explicit train/validation/test material IDs.
 - `checkpoints/`: per-epoch model checkpoints.
 - `checkpoint.pth.tar` and `model_best.pth.tar`: latest and best checkpoints.
@@ -366,10 +452,11 @@ Train a CGCNN regression model on Materials Project CIF structures from
 
 - Source CSV: `{source_csv}`
 - CIF root: `{cif_root}`
+- Target transform: `{target_transform}`{f" with scale `{target_transform_scale}` eV/atom" if target_transform == "scaled_log1p" else ""}
 - Atom features: `{run_dir / "atom_init.json"}` symlinked to `{atom_init}`
 - Source code: `{REPO_ROOT}`
 - Command-line options: see `run_metadata.json`
-- CIF provenance: symlinks are created in this run folder; source CIF files are not copied.
+- CIF provenance: {("symlinks are created in this run folder; source CIF files are not copied." if create_cif_symlinks else "no CIF symlinks are created; graph inputs are read from the graph cache.")}
 
 ## Counts
 
@@ -382,9 +469,10 @@ Train a CGCNN regression model on Materials Project CIF structures from
 
 ## Generated Inputs
 
-- `id_prop.csv`: two-column CGCNN target table, `material_id,energy_above_hull`.
+- `id_prop.csv`: two-column active CGCNN target table after the configured target transform.
+- `id_prop_raw.csv`: raw `energy_above_hull` labels, present for transformed runs.
 - `atom_init.json`: symlink to repo sample regression atom features.
-- `<material_id>.cif`: symlinks to source CIFs under `{cif_root}`.
+- `<material_id>.cif`: {("symlinks to source CIFs under `" + str(cif_root) + "`." if create_cif_symlinks else "not present for this graph-cache run.")}
 - `splits/*.csv`: explicit split IDs generated with seed `{seed}`.
 
 ## Outputs
@@ -394,6 +482,8 @@ Train a CGCNN regression model on Materials Project CIF structures from
 - `checkpoints/epoch_*.pth.tar`: per-epoch checkpoints.
 - `training_history.json`: validation metric by epoch.
 - `test_results.csv`: held-out predictions from the best checkpoint.
+- `test_results_physical.csv`: held-out predictions inverse-transformed to eV/atom.
+- `parity_metrics_physical.json`: physical-scale metrics for the best checkpoint.
 - `epoch_parity/`: per-epoch prediction CSVs, metrics JSON, and parity plots.
 
 ## Timeline
@@ -434,6 +524,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-h", type=int, default=1)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--print-freq", type=int, default=100)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        help="Stop after this many epochs without validation improvement.",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=0.0,
+        help="Minimum validation improvement required to reset early-stopping patience.",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.8)
     parser.add_argument("--val-ratio", type=float, default=0.1)
     parser.add_argument("--test-ratio", type=float, default=0.1)
@@ -448,9 +549,27 @@ def parse_args() -> argparse.Namespace:
         help="Graph cache root to use when --dataset-format=graph_cache.",
     )
     parser.add_argument(
+        "--graph-cache-max-cached-shards",
+        type=int,
+        default=4,
+        help="Maximum graph cache shards retained per dataset object.",
+    )
+    parser.add_argument(
         "--id-prop-file",
         type=Path,
         help="Optional id_prop.csv for graph cache training.",
+    )
+    parser.add_argument(
+        "--target-transform",
+        choices=["raw", "scaled_log1p"],
+        default="raw",
+        help="Target transform used in the active id_prop.csv.",
+    )
+    parser.add_argument(
+        "--target-transform-scale",
+        type=float,
+        default=0.05,
+        help="Scale in eV/atom for --target-transform=scaled_log1p.",
     )
     parser.add_argument(
         "--skip-epoch-parity",
@@ -467,6 +586,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Train using an existing prepared run directory.",
     )
+    parser.add_argument(
+        "--resume",
+        type=Path,
+        help="Resume training from a checkpoint in the prepared run directory.",
+    )
     return parser.parse_args()
 
 
@@ -480,9 +604,20 @@ def main() -> None:
         args.cache_dir = args.cache_dir.expanduser().resolve()
     if args.id_prop_file is not None:
         args.id_prop_file = args.id_prop_file.expanduser().resolve()
+    if args.resume is not None:
+        args.resume = args.resume.expanduser().resolve()
 
     if args.prepare_only and args.reuse_prepared:
         raise ValueError("--prepare-only and --reuse-prepared are mutually exclusive")
+    if args.resume is not None and not args.resume.is_file():
+        raise FileNotFoundError(args.resume)
+    if args.target_transform == "scaled_log1p" and args.target_transform_scale <= 0.0:
+        raise ValueError("--target-transform-scale must be positive")
+    if args.id_prop_file is not None and args.target_transform != "raw":
+        raise ValueError(
+            "--id-prop-file cannot be combined with --target-transform; "
+            "let this script generate the transformed label file in the run directory."
+        )
     if args.run_dir.exists() and not (args.prepare_only or args.reuse_prepared):
         raise FileExistsError(
             f"Run directory already exists: {args.run_dir}. "
@@ -499,6 +634,8 @@ def main() -> None:
             raise ValueError("--cache-dir is required with --dataset-format=graph_cache")
         if not args.cache_dir.is_dir():
             raise FileNotFoundError(args.cache_dir)
+        if args.graph_cache_max_cached_shards < 1:
+            raise ValueError("--graph-cache-max-cached-shards must be at least 1")
         if args.id_prop_file is not None and not args.id_prop_file.is_file():
             raise FileNotFoundError(args.id_prop_file)
     ratio_sum = args.train_ratio + args.val_ratio + args.test_ratio
@@ -521,6 +658,9 @@ def main() -> None:
                 train_ratio=args.train_ratio,
                 val_ratio=args.val_ratio,
                 test_ratio=args.test_ratio,
+                target_transform=args.target_transform,
+                target_transform_scale=args.target_transform_scale,
+                create_cif_symlinks=args.dataset_format != "graph_cache",
                 args_payload=args_payload,
             )
         if args.prepare_only:
@@ -532,6 +672,13 @@ def main() -> None:
             tag_job("running", args.run_dir)
             os.chdir(args.run_dir)
             training_root = args.cache_dir if args.dataset_format == "graph_cache" else args.run_dir
+            training_id_prop_file = args.id_prop_file
+            if (
+                training_id_prop_file is None
+                and args.dataset_format == "graph_cache"
+                and args.target_transform != "raw"
+            ):
+                training_id_prop_file = args.run_dir / "id_prop.csv"
             best_checkpoint = train_model(
                 root_dir=str(training_root),
                 task="regression",
@@ -546,6 +693,9 @@ def main() -> None:
                 device=get_env_device(),
                 workers=args.workers,
                 weight_decay=args.weight_decay,
+                resume=str(args.resume) if args.resume is not None else None,
+                early_stopping_patience=args.early_stopping_patience,
+                early_stopping_min_delta=args.early_stopping_min_delta,
                 train_ratio=args.train_ratio,
                 val_ratio=args.val_ratio,
                 test_ratio=args.test_ratio,
@@ -556,9 +706,50 @@ def main() -> None:
                 metrics_history_path=str(args.run_dir / "training_history.json"),
                 print_freq=args.print_freq,
                 dataset_format=args.dataset_format,
-                id_prop_file=str(args.id_prop_file) if args.id_prop_file is not None else None,
+                graph_cache_max_cached_shards=args.graph_cache_max_cached_shards,
+                id_prop_file=(
+                    str(training_id_prop_file)
+                    if training_id_prop_file is not None
+                    else None
+                ),
             )
             print(f"Best checkpoint: {best_checkpoint}")
+
+            from analyze_parity import compute_metrics, load_results, make_loglog_plot, make_plot
+
+            physical_results_csv = args.run_dir / "test_results_physical.csv"
+            write_physical_results(
+                args.run_dir / "test_results.csv",
+                physical_results_csv,
+                args.target_transform,
+                args.target_transform_scale,
+            )
+            _, physical_targets, physical_predictions = load_results(physical_results_csv)
+            physical_metrics = compute_metrics(physical_targets, physical_predictions)
+            with (args.run_dir / "parity_metrics_physical.json").open("w") as handle:
+                json.dump(
+                    {
+                        **physical_metrics,
+                        **transform_metadata(
+                            args.target_transform,
+                            args.target_transform_scale,
+                        ),
+                    },
+                    handle,
+                    indent=2,
+                )
+            make_plot(
+                physical_targets,
+                physical_predictions,
+                physical_metrics,
+                args.run_dir / "parity_plot_physical.png",
+            )
+            make_loglog_plot(
+                physical_targets,
+                physical_predictions,
+                physical_metrics,
+                args.run_dir / "parity_plot_loglog_physical.png",
+            )
 
             if not args.skip_epoch_parity:
                 from generate_epoch_parity_plots import generate_plots_for_run
@@ -573,7 +764,8 @@ def main() -> None:
                         "graph_cache" if args.dataset_format == "graph_cache" else "cif"
                     ),
                     cache_dir=args.cache_dir,
-                    id_prop_file=args.id_prop_file,
+                    id_prop_file=training_id_prop_file,
+                    max_cached_shards=args.graph_cache_max_cached_shards,
                 )
 
             metadata_path = args.run_dir / "run_metadata.json"
@@ -594,6 +786,8 @@ def main() -> None:
                 args.run_dir / "id_prop.csv",
                 args.run_dir / "model_best.pth.tar",
                 args.run_dir / "test_results.csv",
+                args.run_dir / "test_results_physical.csv",
+                args.run_dir / "parity_metrics_physical.json",
             ]
             if not args.skip_epoch_parity:
                 required_outputs.append(

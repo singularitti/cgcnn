@@ -12,9 +12,22 @@ import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
-def invert_transform(values: np.ndarray, transform: str) -> np.ndarray:
+def _transform_name_and_scale(transform: str | Mapping[str, object]) -> tuple[str, float | None]:
+    if isinstance(transform, Mapping):
+        name = str(transform.get("name", transform.get("target_transform", "raw")))
+        scale = transform.get("scale", transform.get("target_transform_scale"))
+        return name, float(scale) if scale is not None else None
+    return transform, None
+
+
+def invert_transform(values: np.ndarray, transform: str | Mapping[str, object]) -> np.ndarray:
+    transform, scale = _transform_name_and_scale(transform)
     if transform == "raw":
         return values
+    if transform == "scaled_log1p":
+        if scale is None:
+            raise ValueError("scaled_log1p transform requires a scale.")
+        return scale * np.expm1(np.maximum(values, 0.0))
     if transform == "sqrt":
         return np.square(values)
     if transform == "cbrt":
@@ -26,13 +39,23 @@ def invert_transform(values: np.ndarray, transform: str) -> np.ndarray:
     raise ValueError(f"Unsupported transform: {transform}")
 
 
-def load_transform(run_dir: Path) -> str:
+def load_transform(run_dir: Path) -> str | dict[str, object]:
     metadata_path = run_dir / "run_metadata.json"
     if not metadata_path.exists():
         return "raw"
     with metadata_path.open() as handle:
         metadata = json.load(handle)
-    return metadata.get("target_transform", "raw")
+    transform = metadata.get("target_transform", "raw")
+    if (
+        transform == "scaled_log1p"
+        and "target_transform_scale_eV_per_atom" in metadata
+    ):
+        return {
+            "name": "scaled_log1p",
+            "scale": metadata["target_transform_scale_eV_per_atom"],
+            "unit": "eV/atom",
+        }
+    return transform
 
 
 def load_results(test_results_csv: Path) -> tuple[list[str], np.ndarray, np.ndarray]:
@@ -101,17 +124,21 @@ def make_plot(
     predictions: np.ndarray,
     metrics: Mapping[str, int | float | None],
     output_png: Path,
+    axis_max: float | None = None,
 ) -> None:
     def format_metric(value) -> str:
         if value is None:
             return "n/a"
         return f"{value:.4f}"
 
-    combined_min = float(min(np.min(targets), np.min(predictions)))
-    combined_max = float(max(np.max(targets), np.max(predictions)))
-    padding = 0.03 * (combined_max - combined_min) if combined_max > combined_min else 0.1
-    axis_min = combined_min - padding
-    axis_max = combined_max + padding
+    if axis_max is None:
+        combined_min = float(min(np.min(targets), np.min(predictions)))
+        combined_max = float(max(np.max(targets), np.max(predictions)))
+        padding = 0.03 * (combined_max - combined_min) if combined_max > combined_min else 0.1
+        axis_min = combined_min - padding
+        axis_max = combined_max + padding
+    else:
+        axis_min = 0.0
 
     fig, ax = plt.subplots(figsize=(6.5, 6.5), dpi=180)
     ax.scatter(targets, predictions, s=8, alpha=0.35, linewidths=0, color="#1f6feb")

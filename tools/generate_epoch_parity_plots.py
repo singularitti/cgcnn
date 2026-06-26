@@ -126,7 +126,7 @@ def make_fixed_loglog_plot(
     plt.close(fig)
 
 
-def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root: Path) -> None:
+def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root: Path, split: str) -> None:
     epochs = [int(record["epoch"]) for record in summary]
     mae_values = [float(record["mae"]) for record in summary]
     rmse_values = [float(record["rmse"]) for record in summary]
@@ -136,11 +136,16 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
     ]
     r2_values = [float(record["r2_score"]) if record["r2_score"] is not None else float("nan") for record in summary]
 
+    def label_every_epoch(ax) -> None:
+        ax.set_xticks(epochs)
+        ax.set_xticklabels([str(epoch) for epoch in epochs], rotation=90)
+
     fig, ax = plt.subplots(figsize=(8, 4), dpi=180)
     ax.plot(epochs, mae_values, marker="o", linestyle="-", color="#1f77b4")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("MAE")
     ax.set_title("Epoch vs MAE")
+    label_every_epoch(ax)
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.tight_layout()
     fig.savefig(output_root / "epoch_mae.png", bbox_inches="tight")
@@ -151,6 +156,7 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
     ax.set_xlabel("Epoch")
     ax.set_ylabel("R^2")
     ax.set_title("Epoch vs R^2")
+    label_every_epoch(ax)
     ax.grid(True, linestyle="--", alpha=0.4)
     fig.tight_layout()
     fig.savefig(output_root / "epoch_r2.png", bbox_inches="tight")
@@ -164,6 +170,7 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
     ax2.plot(epochs, r2_values, marker="s", linestyle="-", color="#2ca02c", label="R^2")
     ax2.set_ylabel("R^2")
     ax.set_title("Epoch Metrics")
+    label_every_epoch(ax)
     ax.grid(True, linestyle="--", alpha=0.4)
     lines, labels = ax.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
@@ -183,7 +190,8 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
         ax.set_ylabel(label)
         ax.grid(True, linestyle="--", alpha=0.4)
     axes[-1].set_xlabel("Epoch")
-    fig.suptitle("Test Metrics by Epoch")
+    label_every_epoch(axes[-1])
+    fig.suptitle(f"{split.capitalize()} Metrics by Epoch")
     fig.tight_layout()
     fig.savefig(output_root / "epoch_metrics_stacked.png", bbox_inches="tight")
     plt.close(fig)
@@ -199,6 +207,8 @@ def generate_plots_for_run(
     dataset_format: str = "cif",
     cache_dir: Path | None = None,
     id_prop_file: Path | None = None,
+    max_cached_shards: int = 4,
+    split: str = "val",
 ) -> None:
     checkpoint_root = checkpoint_dir or (run_dir / "checkpoints")
     if not checkpoint_root.is_dir():
@@ -208,9 +218,12 @@ def generate_plots_for_run(
     if not splits_dir.is_dir():
         raise FileNotFoundError(f"Split directory not found: {splits_dir}")
 
-    test_ids = read_id_csv(splits_dir / "test_ids.csv")
+    if split not in {"val", "test"}:
+        raise ValueError("split must be 'val' or 'test'.")
+
+    split_ids = read_id_csv(splits_dir / f"{split}_ids.csv")
     if dataset_format == "cif":
-        dataset = CIFData(str(run_dir), shuffle=False, include_ids=test_ids)
+        dataset = CIFData(str(run_dir), shuffle=False, include_ids=split_ids)
     elif dataset_format == "graph_cache":
         if cache_dir is None:
             raise ValueError("cache_dir is required for graph_cache parity generation.")
@@ -218,7 +231,8 @@ def generate_plots_for_run(
             cache_dir,
             id_prop_file=id_prop_file,
             shuffle=False,
-            include_ids=test_ids,
+            include_ids=split_ids,
+            max_cached_shards=max_cached_shards,
         )
     else:
         raise ValueError("dataset_format must be 'cif' or 'graph_cache'.")
@@ -235,11 +249,22 @@ def generate_plots_for_run(
     if not checkpoints:
         raise RuntimeError(f"No epoch checkpoints found in {checkpoint_root}")
 
+    fixed_axis_max = None
+    existing_epoch_csvs = [
+        output_root / f"{split}_results_epoch_{epoch_from_checkpoint(checkpoint):03d}.csv"
+        for checkpoint in checkpoints
+    ]
+    if all(epoch_csv.exists() for epoch_csv in existing_epoch_csvs):
+        fixed_axis_max = max(
+            float(np.max(invert_transform(load_results(epoch_csv)[1], transform)))
+            for epoch_csv in existing_epoch_csvs
+        )
+
     summary: list[dict[str, str | int | float]] = []
     for checkpoint in checkpoints:
         epoch = epoch_from_checkpoint(checkpoint)
-        print(f"Generating epoch {epoch} parity...")
-        epoch_csv = output_root / f"test_results_epoch_{epoch:03d}.csv"
+        print(f"Generating epoch {epoch} {split} parity...")
+        epoch_csv = output_root / f"{split}_results_epoch_{epoch:03d}.csv"
         if not epoch_csv.exists():
             predict_model(
                 dataset=dataset,
@@ -252,6 +277,7 @@ def generate_plots_for_run(
                 shuffle=False,
                 output_csv=str(epoch_csv),
             )
+            fixed_axis_max = None
         else:
             print(f"Reusing existing results for epoch {epoch}.")
 
@@ -259,14 +285,14 @@ def generate_plots_for_run(
         targets = invert_transform(targets, transform)
         predictions = invert_transform(predictions, transform)
         metrics = compute_metrics(targets, predictions)
-        metrics_path = output_root / f"parity_metrics_epoch_{epoch:03d}.json"
-        plot_path = output_root / f"parity_plot_epoch_{epoch:03d}.png"
-        logplot_path = output_root / f"parity_plot_loglog_epoch_{epoch:03d}.png"
+        metrics_path = output_root / f"{split}_parity_metrics_epoch_{epoch:03d}.json"
+        plot_path = output_root / f"{split}_parity_plot_epoch_{epoch:03d}.png"
+        logplot_path = output_root / f"{split}_parity_plot_loglog_epoch_{epoch:03d}.png"
 
         with metrics_path.open("w") as handle:
             json.dump({**metrics, "target_transform": transform, "epoch": epoch}, handle, indent=2)
 
-        make_plot(targets, predictions, metrics, plot_path)
+        make_plot(targets, predictions, metrics, plot_path, axis_max=fixed_axis_max)
         make_fixed_loglog_plot(targets, predictions, metrics, logplot_path)
 
         summary.append(
@@ -277,17 +303,19 @@ def generate_plots_for_run(
                 "r2_score": metrics["r2_score"],
                 "pearson_r": metrics["pearson_r"],
                 "spearman_rho": metrics["spearman_rho"],
+                "split": split,
                 "metric_file": str(metrics_path.name),
                 "plot_file": str(plot_path.name),
                 "logplot_file": str(logplot_path.name) if logplot_path.exists() else "",
             }
         )
 
-    summary_path = output_root / "epoch_parity_summary.json"
+    summary_path = output_root / f"{split}_epoch_parity_summary.json"
     with summary_path.open("w") as handle:
         json.dump(summary, handle, indent=2)
 
-    plot_epoch_metrics(summary, output_root)
+    # Validation metrics are for checkpoint selection; test metrics are only for final held-out reporting.
+    plot_epoch_metrics(summary, output_root, split)
 
     print(f"Generated epoch parity plots in {output_root}")
 
@@ -313,6 +341,13 @@ def main() -> None:
     )
     parser.add_argument("--cache_dir", type=Path)
     parser.add_argument("--id_prop_file", type=Path)
+    parser.add_argument("--max_cached_shards", type=int, default=4)
+    parser.add_argument(
+        "--split",
+        choices=["val", "test"],
+        default="val",
+        help="Split to evaluate by epoch. Use validation for model selection; reserve test for final reporting.",
+    )
     args = parser.parse_args()
     generate_plots_for_run(
         args.run_dir,
@@ -324,6 +359,8 @@ def main() -> None:
         dataset_format=args.dataset_format,
         cache_dir=args.cache_dir,
         id_prop_file=args.id_prop_file,
+        max_cached_shards=args.max_cached_shards,
+        split=args.split,
     )
 
 
