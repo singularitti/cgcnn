@@ -26,7 +26,7 @@ from analyze_parity import (
     load_results,
     make_plot,
 )
-from cgcnn.data import CIFData
+from cgcnn.data import CachedGraphData, CIFData
 from cgcnn.device import get_env_device
 from cgcnn.inference import predict_model
 
@@ -129,6 +129,11 @@ def make_fixed_loglog_plot(
 def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root: Path) -> None:
     epochs = [int(record["epoch"]) for record in summary]
     mae_values = [float(record["mae"]) for record in summary]
+    rmse_values = [float(record["rmse"]) for record in summary]
+    pearson_values = [
+        float(record["pearson_r"]) if record["pearson_r"] is not None else float("nan")
+        for record in summary
+    ]
     r2_values = [float(record["r2_score"]) if record["r2_score"] is not None else float("nan") for record in summary]
 
     fig, ax = plt.subplots(figsize=(8, 4), dpi=180)
@@ -167,6 +172,22 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
     fig.savefig(output_root / "epoch_metrics.png", bbox_inches="tight")
     plt.close(fig)
 
+    fig, axes = plt.subplots(3, 1, figsize=(8, 8), dpi=180, sharex=True)
+    stacked_metrics = [
+        ("Pearson r", pearson_values, "#9467bd"),
+        ("MAE", mae_values, "#1f77b4"),
+        ("RMSE", rmse_values, "#d62728"),
+    ]
+    for ax, (label, values, color) in zip(axes, stacked_metrics, strict=True):
+        ax.plot(epochs, values, marker="o", linestyle="-", color=color)
+        ax.set_ylabel(label)
+        ax.grid(True, linestyle="--", alpha=0.4)
+    axes[-1].set_xlabel("Epoch")
+    fig.suptitle("Test Metrics by Epoch")
+    fig.tight_layout()
+    fig.savefig(output_root / "epoch_metrics_stacked.png", bbox_inches="tight")
+    plt.close(fig)
+
 
 def generate_plots_for_run(
     run_dir: Path,
@@ -175,6 +196,9 @@ def generate_plots_for_run(
     device: str | None,
     checkpoint_dir: Path | None = None,
     max_epochs: int | None = None,
+    dataset_format: str = "cif",
+    cache_dir: Path | None = None,
+    id_prop_file: Path | None = None,
 ) -> None:
     checkpoint_root = checkpoint_dir or (run_dir / "checkpoints")
     if not checkpoint_root.is_dir():
@@ -185,7 +209,19 @@ def generate_plots_for_run(
         raise FileNotFoundError(f"Split directory not found: {splits_dir}")
 
     test_ids = read_id_csv(splits_dir / "test_ids.csv")
-    dataset = CIFData(str(run_dir), shuffle=False, include_ids=test_ids)
+    if dataset_format == "cif":
+        dataset = CIFData(str(run_dir), shuffle=False, include_ids=test_ids)
+    elif dataset_format == "graph_cache":
+        if cache_dir is None:
+            raise ValueError("cache_dir is required for graph_cache parity generation.")
+        dataset = CachedGraphData(
+            cache_dir,
+            id_prop_file=id_prop_file,
+            shuffle=False,
+            include_ids=test_ids,
+        )
+    else:
+        raise ValueError("dataset_format must be 'cif' or 'graph_cache'.")
     transform = load_transform(run_dir)
     output_root = run_dir / "epoch_parity"
     output_root.mkdir(parents=True, exist_ok=True)
@@ -270,6 +306,13 @@ def main() -> None:
     )
     parser.add_argument("--checkpoint_dir", type=Path)
     parser.add_argument("--max_epoch", type=int)
+    parser.add_argument(
+        "--dataset_format",
+        choices=["cif", "graph_cache"],
+        default="cif",
+    )
+    parser.add_argument("--cache_dir", type=Path)
+    parser.add_argument("--id_prop_file", type=Path)
     args = parser.parse_args()
     generate_plots_for_run(
         args.run_dir,
@@ -278,6 +321,9 @@ def main() -> None:
         device=args.device,
         checkpoint_dir=args.checkpoint_dir,
         max_epochs=args.max_epoch,
+        dataset_format=args.dataset_format,
+        cache_dir=args.cache_dir,
+        id_prop_file=args.id_prop_file,
     )
 
 
