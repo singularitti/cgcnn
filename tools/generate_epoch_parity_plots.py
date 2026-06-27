@@ -106,8 +106,7 @@ def make_fixed_loglog_plot(
     text = "\n".join(
         [
             f"N = {metrics['count']}",
-            f"R = {metrics['pearson_r']:.4f}" if metrics["pearson_r"] is not None else "R = n/a",
-            f"R^2 = {metrics['r2_score']:.4f}" if metrics["r2_score"] is not None else "R^2 = n/a",
+            f"ρ = {metrics['spearman_rho']:.4f}" if metrics["spearman_rho"] is not None else "ρ = n/a",
             f"MAE = {metrics['mae']:.4f}",
             f"RMSE = {metrics['rmse']:.4f}",
         ]
@@ -130,58 +129,23 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
     epochs = [int(record["epoch"]) for record in summary]
     mae_values = [float(record["mae"]) for record in summary]
     rmse_values = [float(record["rmse"]) for record in summary]
-    pearson_values = [
-        float(record["pearson_r"]) if record["pearson_r"] is not None else float("nan")
+    spearman_values = [
+        float(record["spearman_rho"]) if record["spearman_rho"] is not None else float("nan")
         for record in summary
     ]
-    r2_values = [float(record["r2_score"]) if record["r2_score"] is not None else float("nan") for record in summary]
 
     def label_every_epoch(ax) -> None:
         ax.set_xticks(epochs)
         ax.set_xticklabels([str(epoch) for epoch in epochs], rotation=90)
 
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=180)
-    ax.plot(epochs, mae_values, marker="o", linestyle="-", color="#1f77b4")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("MAE")
-    ax.set_title("Epoch vs MAE")
-    label_every_epoch(ax)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    fig.tight_layout()
-    fig.savefig(output_root / "epoch_mae.png", bbox_inches="tight")
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=180)
-    ax.plot(epochs, r2_values, marker="o", linestyle="-", color="#2ca02c")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("R^2")
-    ax.set_title("Epoch vs R^2")
-    label_every_epoch(ax)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    fig.tight_layout()
-    fig.savefig(output_root / "epoch_r2.png", bbox_inches="tight")
-    plt.close(fig)
-
-    fig, ax = plt.subplots(figsize=(8, 4), dpi=180)
-    ax.plot(epochs, mae_values, marker="o", linestyle="-", color="#1f77b4", label="MAE")
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("MAE")
-    ax2 = ax.twinx()
-    ax2.plot(epochs, r2_values, marker="s", linestyle="-", color="#2ca02c", label="R^2")
-    ax2.set_ylabel("R^2")
-    ax.set_title("Epoch Metrics")
-    label_every_epoch(ax)
-    ax.grid(True, linestyle="--", alpha=0.4)
-    lines, labels = ax.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax.legend(lines + lines2, labels + labels2, loc="best")
-    fig.tight_layout()
-    fig.savefig(output_root / "epoch_metrics.png", bbox_inches="tight")
-    plt.close(fig)
+    for obsolete_plot in ["epoch_mae.png", "epoch_r2.png", "epoch_metrics.png"]:
+        obsolete_path = output_root / obsolete_plot
+        if obsolete_path.exists():
+            obsolete_path.unlink()
 
     fig, axes = plt.subplots(3, 1, figsize=(8, 8), dpi=180, sharex=True)
     stacked_metrics = [
-        ("Pearson r", pearson_values, "#9467bd"),
+        ("Spearman ρ", spearman_values, "#9467bd"),
         ("MAE", mae_values, "#1f77b4"),
         ("RMSE", rmse_values, "#d62728"),
     ]
@@ -189,6 +153,7 @@ def plot_epoch_metrics(summary: list[dict[str, str | int | float]], output_root:
         ax.plot(epochs, values, marker="o", linestyle="-", color=color)
         ax.set_ylabel(label)
         ax.grid(True, linestyle="--", alpha=0.4)
+    axes[0].set_ylim(-1.0, 1.0)
     axes[-1].set_xlabel("Epoch")
     label_every_epoch(axes[-1])
     fig.suptitle(f"{split.capitalize()} Metrics by Epoch")
@@ -209,6 +174,7 @@ def generate_plots_for_run(
     id_prop_file: Path | None = None,
     max_cached_shards: int = 4,
     split: str = "val",
+    include_loglog: bool = False,
 ) -> None:
     checkpoint_root = checkpoint_dir or (run_dir / "checkpoints")
     if not checkpoint_root.is_dir():
@@ -222,6 +188,11 @@ def generate_plots_for_run(
         raise ValueError("split must be 'val' or 'test'.")
 
     split_ids = read_id_csv(splits_dir / f"{split}_ids.csv")
+    if dataset_format == "graph_cache" and id_prop_file is None:
+        run_id_prop_file = run_dir / "id_prop.csv"
+        if run_id_prop_file.exists():
+            id_prop_file = run_id_prop_file
+
     if dataset_format == "cif":
         dataset = CIFData(str(run_dir), shuffle=False, include_ids=split_ids)
     elif dataset_format == "graph_cache":
@@ -249,17 +220,6 @@ def generate_plots_for_run(
     if not checkpoints:
         raise RuntimeError(f"No epoch checkpoints found in {checkpoint_root}")
 
-    fixed_axis_max = None
-    existing_epoch_csvs = [
-        output_root / f"{split}_results_epoch_{epoch_from_checkpoint(checkpoint):03d}.csv"
-        for checkpoint in checkpoints
-    ]
-    if all(epoch_csv.exists() for epoch_csv in existing_epoch_csvs):
-        fixed_axis_max = max(
-            float(np.max(invert_transform(load_results(epoch_csv)[1], transform)))
-            for epoch_csv in existing_epoch_csvs
-        )
-
     summary: list[dict[str, str | int | float]] = []
     for checkpoint in checkpoints:
         epoch = epoch_from_checkpoint(checkpoint)
@@ -284,6 +244,7 @@ def generate_plots_for_run(
         _, targets, predictions = load_results(epoch_csv)
         targets = invert_transform(targets, transform)
         predictions = invert_transform(predictions, transform)
+        fixed_axis_max = float(np.max(targets))
         metrics = compute_metrics(targets, predictions)
         metrics_path = output_root / f"{split}_parity_metrics_epoch_{epoch:03d}.json"
         plot_path = output_root / f"{split}_parity_plot_epoch_{epoch:03d}.png"
@@ -293,7 +254,10 @@ def generate_plots_for_run(
             json.dump({**metrics, "target_transform": transform, "epoch": epoch}, handle, indent=2)
 
         make_plot(targets, predictions, metrics, plot_path, axis_max=fixed_axis_max)
-        make_fixed_loglog_plot(targets, predictions, metrics, logplot_path)
+        if include_loglog:
+            make_fixed_loglog_plot(targets, predictions, metrics, logplot_path)
+        elif logplot_path.exists():
+            logplot_path.unlink()
 
         summary.append(
             {
@@ -306,7 +270,7 @@ def generate_plots_for_run(
                 "split": split,
                 "metric_file": str(metrics_path.name),
                 "plot_file": str(plot_path.name),
-                "logplot_file": str(logplot_path.name) if logplot_path.exists() else "",
+                "logplot_file": str(logplot_path.name) if include_loglog and logplot_path.exists() else "",
             }
         )
 
@@ -348,6 +312,11 @@ def main() -> None:
         default="val",
         help="Split to evaluate by epoch. Use validation for model selection; reserve test for final reporting.",
     )
+    parser.add_argument(
+        "--include-loglog",
+        action="store_true",
+        help="Also write log-log parity plots. Disabled by default.",
+    )
     args = parser.parse_args()
     generate_plots_for_run(
         args.run_dir,
@@ -361,6 +330,7 @@ def main() -> None:
         id_prop_file=args.id_prop_file,
         max_cached_shards=args.max_cached_shards,
         split=args.split,
+        include_loglog=args.include_loglog,
     )
 
 

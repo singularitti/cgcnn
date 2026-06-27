@@ -153,8 +153,7 @@ def make_plot(
     text = "\n".join(
         [
             f"N = {metrics['count']}",
-            f"R = {format_metric(metrics['pearson_r'])}",
-            f"R^2 = {format_metric(metrics['r2_score'])}",
+            f"ρ = {format_metric(metrics['spearman_rho'])}",
             f"MAE = {format_metric(metrics['mae'])}",
             f"RMSE = {format_metric(metrics['rmse'])}",
         ]
@@ -205,8 +204,7 @@ def make_loglog_plot(
     text = "\n".join(
         [
             f"N = {metrics['count']}",
-            f"R = {format_metric(metrics['pearson_r'])}",
-            f"R^2 = {format_metric(metrics['r2_score'])}",
+            f"ρ = {format_metric(metrics['spearman_rho'])}",
             f"MAE = {format_metric(metrics['mae'])}",
             f"RMSE = {format_metric(metrics['rmse'])}",
         ]
@@ -231,7 +229,6 @@ if __name__ == "__main__":
     test_results_csv = run_dir / "test_results.csv"
     metrics_json = run_dir / "parity_metrics.json"
     output_png = run_dir / "parity_plot.png"
-    output_loglog_png = run_dir / "parity_plot_loglog.png"
 
     transform = load_transform(run_dir)
     _, targets, predictions = load_results(test_results_csv)
@@ -239,12 +236,9 @@ if __name__ == "__main__":
     predictions = invert_transform(predictions, transform)
     metrics = compute_metrics(targets, predictions)
     make_plot(targets, predictions, metrics, output_png)
-    make_loglog_plot(targets, predictions, metrics, output_loglog_png)
 
     with metrics_json.open("w") as handle:
         json.dump({**metrics, "target_transform": transform}, handle, indent=2)
 
     print(output_png)
-    if output_loglog_png.exists():
-        print(output_loglog_png)
     print(metrics_json)

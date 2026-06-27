@@ -432,7 +432,7 @@ CIF file was missing were also excluded.
 - `<material_id>.cif`: {("symlinks to the source CIF files." if create_cif_symlinks else "not present for this graph-cache run.")}
 - `splits/`: explicit train/validation/test material IDs.
 - `checkpoints/`: per-epoch model checkpoints.
-- `checkpoint.pth.tar` and `model_best.pth.tar`: latest and best checkpoints.
+- `checkpoint.pth.tar` and `model_best.pth.tar`: symlink aliases to the latest and best files under `checkpoints/`.
 - `training_history.json`: validation MAE history written during training.
 - `test_results.csv`: held-out predictions for the best model.
 - `epoch_parity/`: per-epoch test predictions, metrics, and parity plots.
@@ -478,7 +478,7 @@ Train a CGCNN regression model on Materials Project CIF structures from
 ## Outputs
 
 - `run.log`: combined training stdout/stderr.
-- `checkpoint.pth.tar`, `model_best.pth.tar`: latest and best checkpoints.
+- `checkpoint.pth.tar`, `model_best.pth.tar`: symlink aliases to the latest and best files under `checkpoints/`.
 - `checkpoints/epoch_*.pth.tar`: per-epoch checkpoints.
 - `training_history.json`: validation metric by epoch.
 - `test_results.csv`: held-out predictions from the best checkpoint.
@@ -503,14 +503,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare and train a CGCNN energy_above_hull regression run."
     )
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
     parser.add_argument("--source-csv", type=Path, default=DEFAULT_SOURCE_CSV)
     parser.add_argument("--cif-root", type=Path, default=DEFAULT_CIF_ROOT)
     parser.add_argument("--atom-init", type=Path, default=DEFAULT_ATOM_INIT)
     parser.add_argument(
         "--run-dir",
         type=Path,
-        default=Path.home() / "run" / "training",
+        default=Path.home() / "run" / f"mp_ehull_training_{timestamp}",
     )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=256)
@@ -715,7 +715,7 @@ def main() -> None:
             )
             print(f"Best checkpoint: {best_checkpoint}")
 
-            from analyze_parity import compute_metrics, load_results, make_loglog_plot, make_plot
+            from analyze_parity import compute_metrics, load_results, make_plot
 
             physical_results_csv = args.run_dir / "test_results_physical.csv"
             write_physical_results(
@@ -744,13 +744,6 @@ def main() -> None:
                 physical_metrics,
                 args.run_dir / "parity_plot_physical.png",
             )
-            make_loglog_plot(
-                physical_targets,
-                physical_predictions,
-                physical_metrics,
-                args.run_dir / "parity_plot_loglog_physical.png",
-            )
-
             if not args.skip_epoch_parity:
                 from generate_epoch_parity_plots import generate_plots_for_run
 

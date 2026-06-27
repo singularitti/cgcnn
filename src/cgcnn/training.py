@@ -5,7 +5,6 @@ This refactors the previous `main.py` logic into importable functions.
 
 import json
 import os
-import shutil
 import sys
 import time
 import warnings
@@ -36,6 +35,18 @@ from .utils import (
 )
 
 __all__ = ["train_model"]
+
+
+def _replace_symlink(link_path: str, target_path: str) -> None:
+    link_abs = os.path.abspath(link_path)
+    link_dir = os.path.dirname(link_abs) or "."
+    target_abs = os.path.abspath(target_path)
+    relative_target = os.path.relpath(target_abs, link_dir)
+    tmp_link = f"{link_abs}.tmp-{os.getpid()}"
+    if os.path.lexists(tmp_link):
+        os.unlink(tmp_link)
+    os.symlink(relative_target, tmp_link)
+    os.replace(tmp_link, link_abs)
 
 
 def train_model(
@@ -357,12 +368,17 @@ def train_model(
                 "n_classes": n_classes if task == "classification" else None,
             },
         }
-        save_checkpoint(checkpoint_state, is_best)
         if checkpoint_dir is not None:
             epoch_checkpoint_path = os.path.join(
                 checkpoint_dir, f"epoch_{epoch + 1:03d}.pth.tar"
             )
-            shutil.copyfile("checkpoint.pth.tar", epoch_checkpoint_path)
+            save_checkpoint(checkpoint_state, False, filename=epoch_checkpoint_path)
+            _replace_symlink("checkpoint.pth.tar", epoch_checkpoint_path)
+            if is_best:
+                _replace_symlink("model_best.pth.tar", epoch_checkpoint_path)
+        else:
+            save_checkpoint(checkpoint_state, is_best)
+            epoch_checkpoint_path = "checkpoint.pth.tar"
         history.append(
             {
                 "epoch": epoch + 1,
