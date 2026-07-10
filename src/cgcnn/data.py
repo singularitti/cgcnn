@@ -23,6 +23,7 @@ __all__ = [
     "GaussianDistance",
     "build_crystal_graph",
     "collate_pool",
+    "collate_pool_vectorized",
     "get_train_val_test_loader",
     "graph_arrays_to_tensors",
     "load_cif_structure",
@@ -42,6 +43,8 @@ def get_train_val_test_loader(
     train_indices=None,
     val_indices=None,
     test_indices=None,
+    persistent_workers=False,
+    prefetch_factor=None,
     **kwargs,
 ):
     """
@@ -74,6 +77,11 @@ def get_train_val_test_loader(
       DataLoader that random samples the test data, returns if
         return_test=True.
     """
+    loader_kwargs = {}
+    if num_workers > 0:
+        loader_kwargs["persistent_workers"] = persistent_workers
+        if prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = prefetch_factor
     explicit_indices = any(
         indices is not None for indices in [train_indices, val_indices, test_indices]
     )
@@ -126,6 +134,7 @@ def get_train_val_test_loader(
         num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=pin_memory,
+        **loader_kwargs,
     )
     val_loader = DataLoader(
         dataset,
@@ -134,6 +143,7 @@ def get_train_val_test_loader(
         num_workers=num_workers,
         collate_fn=collate_fn,
         pin_memory=pin_memory,
+        **loader_kwargs,
     )
     if return_test:
         test_loader = DataLoader(
@@ -143,6 +153,7 @@ def get_train_val_test_loader(
             num_workers=num_workers,
             collate_fn=collate_fn,
             pin_memory=pin_memory,
+            **loader_kwargs,
         )
     if return_test:
         return train_loader, val_loader, test_loader
@@ -205,6 +216,44 @@ def collate_pool(dataset_list):
             torch.cat(batch_nbr_fea, dim=0),
             torch.cat(batch_nbr_fea_idx, dim=0),
             crystal_atom_idx,
+        ),
+        torch.stack(batch_target, dim=0),
+        batch_cif_ids,
+    )
+
+
+def collate_pool_vectorized(dataset_list):
+    """Collate crystals with a vectorized crystal-to-atom mapping.
+
+    Unlike :func:`collate_pool`, this returns ``(batch_index, atom_counts)``
+    instead of one index tensor per crystal. ``CrystalGraphConvNet.pooling``
+    can reduce this representation with one ``index_add_`` call, avoiding one
+    small GPU indexing/mean operation per crystal.
+    """
+    batch_atom_fea, batch_nbr_fea, batch_nbr_fea_idx = [], [], []
+    batch_index, atom_counts, batch_target, batch_cif_ids = [], [], [], []
+    base_idx = 0
+    for crystal_idx, ((atom_fea, nbr_fea, nbr_fea_idx), target, cif_id) in enumerate(
+        dataset_list
+    ):
+        atom_count = atom_fea.shape[0]
+        batch_atom_fea.append(atom_fea)
+        batch_nbr_fea.append(nbr_fea)
+        batch_nbr_fea_idx.append(nbr_fea_idx + base_idx)
+        batch_index.append(torch.full((atom_count,), crystal_idx, dtype=torch.long))
+        atom_counts.append(atom_count)
+        batch_target.append(target)
+        batch_cif_ids.append(cif_id)
+        base_idx += atom_count
+    return (
+        (
+            torch.cat(batch_atom_fea, dim=0),
+            torch.cat(batch_nbr_fea, dim=0),
+            torch.cat(batch_nbr_fea_idx, dim=0),
+            (
+                torch.cat(batch_index, dim=0),
+                torch.tensor(atom_counts, dtype=torch.long),
+            ),
         ),
         torch.stack(batch_target, dim=0),
         batch_cif_ids,

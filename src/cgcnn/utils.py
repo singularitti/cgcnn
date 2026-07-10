@@ -303,6 +303,7 @@ def _print_progress(
             )
 
 
+@torch.inference_mode()
 def _validate(
     val_loader,
     model,

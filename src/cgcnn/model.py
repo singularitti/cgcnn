@@ -235,9 +235,20 @@ class CrystalGraphConvNet(nn.Module):
 
         atom_fea: Variable(torch.Tensor) shape (N, atom_fea_len)
           Atom feature vectors of the batch
-        crystal_atom_idx: list of torch.LongTensor of length N0
-          Mapping from the crystal idx to atom idx
+        crystal_atom_idx: list of torch.LongTensor of length N0, or tuple
+          Mapping from the crystal idx to atom idx. The tuple form is
+          ``(batch_index, atom_counts)`` and enables vectorized pooling.
         """
+        if isinstance(crystal_atom_idx, tuple):
+            batch_index, atom_counts = crystal_atom_idx
+            if batch_index.ndim != 1 or atom_counts.ndim != 1:
+                raise ValueError("Vectorized pooling indices and counts must be 1-D.")
+            if batch_index.numel() != atom_fea.shape[0]:
+                raise ValueError("Vectorized pooling index length does not match atom count.")
+            pooled = atom_fea.new_zeros((atom_counts.numel(), atom_fea.shape[1]))
+            pooled.index_add_(0, batch_index, atom_fea)
+            return pooled / atom_counts.to(dtype=atom_fea.dtype).unsqueeze(1)
+
         assert (
             sum([len(idx_map) for idx_map in crystal_atom_idx])
             == atom_fea.data.shape[0]
