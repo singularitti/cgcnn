@@ -75,6 +75,7 @@ def train_model(
     val_size: int | None = None,
     test_size: int | None = None,
     resume: str | None = None,
+    resume_lr: float | None = None,
     initialize_from: str | None = None,
     checkpoint_dir: str | None = None,
     metrics_history_path: str | None = None,
@@ -90,6 +91,8 @@ def train_model(
     dataset_format: str = "cif",
     id_prop_file: str | None = None,
     graph_cache_max_cached_shards: int = 512,
+    persistent_workers: bool = False,
+    prefetch_factor: int | None = None,
 ):
     """Train a CGCNN model.
 
@@ -196,6 +199,8 @@ def train_model(
         train_indices=train_indices,
         val_indices=val_indices,
         test_indices=test_indices,
+        persistent_workers=persistent_workers,
+        prefetch_factor=prefetch_factor,
     )
     if isinstance(returned_loaders, tuple) and len(returned_loaders) == 3:
         train_loader, val_loader, test_loader = returned_loaders
@@ -285,6 +290,9 @@ def train_model(
                 best_validation_score = float(best_validation_score.item())
             model.load_state_dict(checkpoint["state_dict"])  # raises if mismatch
             optimizer.load_state_dict(checkpoint["optimizer"])
+            if resume_lr is not None:
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = resume_lr
             normalizer.load_state_dict(checkpoint["normalizer"])
 
     scheduler = MultiStepLR(optimizer, milestones=lr_milestones, gamma=0.1)
